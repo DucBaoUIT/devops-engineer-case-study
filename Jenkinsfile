@@ -114,16 +114,25 @@ pipeline {
         }
 
         stage('Build image') {
-          // Skip the build when only documentation changed — BUT always build
-          // on a branch's FIRST build. A fresh branch/clone has an empty
-          // changelog, so `changeset` alone would match nothing and the very
-          // first run would skip Build → Publish → Deploy → Smoke entirely
-          // (observed: "Warning, empty changelog. Probably because this is the
-          // first build."). `previousBuild == null` detects that first run.
+          // Skip the build when only documentation/slides changed. The
+          // declarative `changeset` condition is UNRELIABLE here: `cleanWs`
+          // wipes the workspace every build, so the git plugin computes an
+          // EMPTY changelog and `changeset` never matches — the pipeline would
+          // skip Build → Publish → Deploy → Smoke on EVERY run (observed on
+          // builds #1 and #2: "empty changelog" / stage skipped). Decide with
+          // git directly against the previous commit instead (a fresh clone
+          // still has full history). Build if any relevant path changed, or on
+          // the first commit / when the diff cannot be determined (safe
+          // default = build).
           when {
-            anyOf {
-              changeset "app/**,Dockerfile,.dockerignore,k8s/**,Jenkinsfile,scripts/**"
-              expression { return currentBuild.previousBuild == null }
+            expression {
+              def out = sh(returnStdout: true,
+                script: 'git diff --name-only HEAD~1 HEAD 2>/dev/null || echo __BUILD__').trim()
+              if (!out || out.contains('__BUILD__')) { return true }
+              return out.split('\n').any { p ->
+                p == 'Dockerfile' || p == '.dockerignore' || p == 'Jenkinsfile' ||
+                p.startsWith('app/') || p.startsWith('k8s/') || p.startsWith('scripts/')
+              }
             }
           }
           steps {
