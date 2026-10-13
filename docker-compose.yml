@@ -11,7 +11,17 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
       - "127.0.0.1:50000:50000"
-    volumes: [jenkins_home:/var/jenkins_home]
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      # Read-only view of the repo so the CONTROLLER can run multibranch
+      # indexing (branch discovery) and load the Jenkinsfile from
+      # file:///repo-src. Indexing + pipeline-definition loading happen on the
+      # controller (flyweight), NOT the agent, so the controller needs SCM
+      # reachability too. The repo has no committed secrets (.jenkins-setup/,
+      # kubeconfig*, *.pem are gitignored); the controller is loopback-only and
+      # already stores every credential, so this mount adds no new trust
+      # surface. Reversible: drop this line and recreate to revert.
+      - .:/repo-src:ro
     restart: unless-stopped
     profiles: ["jenkins"]   # not started by plain `docker compose up`
     networks: [default]

@@ -62,7 +62,17 @@ RUN curl -fsSL "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64" \
 RUN if ! getent group "$DOCKER_GID" >/dev/null; then groupadd -g "$DOCKER_GID" docker; fi \
  && usermod -aG "$DOCKER_GID" jenkins
 
+# Trust the read-only repo bind mount (/repo-src) for git. The mount is owned
+# by root on the host while the agent runs as uid 1000, so git's "dubious
+# ownership" guard would otherwise block `checkout scm` from file:///repo-src.
+# safe.directory is only honored from SYSTEM/GLOBAL config (not `-c` or the
+# GIT_CONFIG_* env), so it is set system-wide here. /repo-src/.git is the path
+# git reports for a file:// remote of a non-bare repo.
+RUN git config --system --add safe.directory /repo-src \
+ && git config --system --add safe.directory /repo-src/.git
+
 USER jenkins
 
 # Sanity: these run at build time and fail the build if a tool is missing.
-RUN docker --version && docker buildx version && kubectl version --client && kind version && python3 --version && git --version
+RUN docker --version && docker buildx version && kubectl version --client && kind version && python3 --version && git --version \
+ && test "$(git config --system --get-all safe.directory | grep -c '/repo-src')" -ge 1 && echo 'git safe.directory: ok'

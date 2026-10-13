@@ -114,9 +114,17 @@ pipeline {
         }
 
         stage('Build image') {
-          // Skip the build entirely if only documentation changed.
+          // Skip the build when only documentation changed — BUT always build
+          // on a branch's FIRST build. A fresh branch/clone has an empty
+          // changelog, so `changeset` alone would match nothing and the very
+          // first run would skip Build → Publish → Deploy → Smoke entirely
+          // (observed: "Warning, empty changelog. Probably because this is the
+          // first build."). `previousBuild == null` detects that first run.
           when {
-            changeset "app/**,Dockerfile,.dockerignore,k8s/**,Jenkinsfile,scripts/**"
+            anyOf {
+              changeset "app/**,Dockerfile,.dockerignore,k8s/**,Jenkinsfile,scripts/**"
+              expression { return currentBuild.previousBuild == null }
+            }
           }
           steps {
             sh '''
