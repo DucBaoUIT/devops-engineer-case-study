@@ -98,7 +98,7 @@ two of which run in parallel, plus explicit guards and a smoke test.
 | `Checkout` | `Checkout` + record `GIT_SHA_SHORT` for logs |
 | — | **`Validate repo`** — checks required files exist, refuses to build if any secret-like file is tracked, asserts the Dockerfile has a `USER` directive |
 | `Unit tests` (sequential) | **`Test & Build`** parallel block: `Unit tests` runs concurrently with `Build image` |
-| `Build image` (sequential, after tests) | Runs in parallel with tests; skipped entirely if only docs/slides changed (`when { changeset "app/**,Dockerfile,.dockerignore,k8s/**,Jenkinsfile,scripts/**" }`) |
+| `Build image` (sequential, after tests) | Runs in parallel with tests; **skipped when only docs/slides changed** — the gate decides via `git diff --name-only HEAD~1 HEAD` against the build-relevant paths (`Dockerfile`, `.dockerignore`, `Jenkinsfile`, `app/`, `k8s/`, `scripts/`), **not** `changeset` (unreliable with `cleanWs`; see troubleshooting **T14**). Verified: build #4 (docs-only) skipped Build→Publish→Deploy→Smoke; build #3 (Jenkinsfile change) ran them all. |
 | `Push image` on `main` | `Publish image` on `main` **and** only if `env.IMAGE_BUILT == 'true'`; pushes both the SHA tag and `latest`; records the digest as a fingerprinted artifact |
 | `Deploy Kubernetes` used `kubectl set image` only | `Deploy to Kubernetes` renders the kustomize overlay when present, applies it, then `set image` + `rollout status --timeout=180s`, then prints pods |
 | — | **`Smoke test`** — opens a `kubectl port-forward` on `127.0.0.1:18082` (loopback only), curls `/health` and `/`, fails the build if either is wrong |
@@ -131,6 +131,14 @@ Full table in `docs/evidence/phase6-measurements.md`. Headline numbers:
 | Image size | 185 MB | 186 MB | +1 MB (tini) |
 | End-to-end deploy (build → load → apply → smoke) | not measured (manual, error-prone) | ~9 s warm, ~23 s cold | one command |
 | Rollback | 2 lines, no verification | guarded script with history, dry-run, revision pinning | qualitative |
+| CI run, **relevant** change (build #3, `Jenkinsfile`) | — | all 8 stages ran, **~118 s**: build → **push** `21520623/devops-demo-web:9b93e2104bec` → deploy (kind pulled the digest back) → smoke 200 | end-to-end verified |
+| CI run, **docs-only** change (build #4, `README`+`docs/*`) | would rebuild + re-push | Build/Publish/Deploy/Smoke **skipped** (~45 s; Checkout + Validate + Unit tests only), **no image pushed**, live deployment untouched | **needless rebuild/push avoided** |
+
+The build gate is demonstrated, not theoretical: the *same* multibranch job
+produced a full push+deploy on a `Jenkinsfile` change (build #3) and a clean
+skip on a docs-only change (build #4). Evidence:
+`docs/evidence/phase5-jenkins-ci.md` §5, and the build #4 console
+(`Stage "Build image" skipped due to when conditional`).
 
 ## 4. What was **not** done, and why
 
