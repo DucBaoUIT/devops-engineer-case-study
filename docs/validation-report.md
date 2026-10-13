@@ -30,13 +30,13 @@ Working image tag: `devops-demo-web:cc5480ddbf9e-w53253e69`
 | A15 | Unit-test failure halts the pipeline before build | **PASS** (simulated) | Drill 3 — exit code 1 from a deliberately failing test |
 | A16 | Image tag is immutable and traceable to a git commit | **PASS** | Tag format `<git-sha-12>-w<worktree-hash>`; Jenkinsfile uses `env.GIT_COMMIT.take(12)` |
 | A17 | No secrets in repository, image or logs | **PASS** | `.gitignore` + `.dockerignore` block `.env*`, `*.pem`, `*.key`, `id_rsa`, `id_ed25519`, `kubeconfig*`, `credentials*`, `secrets/`; Jenkinsfile references credentials by ID only |
-| A18 | Jenkins pipeline completes successfully | **PASS** | Build #2 `SUCCESS` (16 s) on agent `linux-docker-agent`: Validate → Unit tests (2 pass) → Docker build (BuildKit/buildx) → read-only `kubeconfig-dev` cluster check (`demo-web 2/2 READY`). `docs/evidence/phase5-jenkins-ci.md`. Publish/Deploy/Smoke skipped — see A19. |
-| A19 | Image pushed to Docker Hub | **BLOCKED** | Namespace known (`21520623`) and `dockerhub-username` credential created, but the `dockerhub-creds` **access token** is not configured (operator must add it via the UI). No push performed. See §3. |
-| A20 | Deployment uses the expected image tag | **PASS** | `kubectl get deploy demo-web -o jsonpath='{.spec.template.spec.containers[0].image}'` → `devops-demo-web:cc5480ddbf9e-w53253e69` |
+| A18 | Jenkins pipeline completes successfully | **PASS** | Multibranch `devops-case-study/main` build **#3 `SUCCESS` (~118 s)** on agent `linux-docker-agent`, running the repo's authoritative `Jenkinsfile` @ `9b93e21`: Checkout → Validate → Unit tests (2 pass) ‖ Docker build (BuildKit/buildx, 186 MB) → Publish (real push) → Deploy (rollout 2/2) → Smoke (`/health` 200). `docs/evidence/phase5-jenkins-ci.md` §5. |
+| A19 | Image pushed to Docker Hub | **PASS** | Build #3: `docker login` → `Login Succeeded`, pushed `21520623/devops-demo-web:9b93e2104bec` + `:latest`, digest `sha256:dc269a5a…6150`. kind then **pulled the same digest** back (running pods' `imageID` matches), proving the round-trip. `dockerhub-creds` (user `21520623` + access token) added by operator. `docs/evidence/phase5-jenkins-ci.md` §5/§5.1. |
+| A20 | Deployment uses the expected image tag | **PASS** | After build #3: `kubectl get deploy demo-web -o jsonpath='{..image}'` → `21520623/devops-demo-web:9b93e2104bec` (the CI-pushed Hub tag); pods' `imageID` = `docker.io/21520623/devops-demo-web@sha256:dc269a5a…6150` |
 | A21 | Smoke test passes | **PASS** | `/health` 200, `/` returns `{"service":"demo-web","version":"k8s","message":"Hello from Kubernetes"}` |
 | A22 | Documentation reflects the real state | **PASS** | This file + `docs/architecture.md`, `docs/deployment-guide.md`, `docs/troubleshooting.md`, `docs/pipeline-optimization.md`, `docs/environment-audit.md` |
 
-**Overall: 21 PASS, 1 BLOCKED, 0 FAIL.**
+**Overall: 22 PASS, 0 BLOCKED, 0 FAIL.**
 
 ## 2. Evidence index
 
@@ -46,12 +46,14 @@ Working image tag: `devops-demo-web:cc5480ddbf9e-w53253e69`
 | `docs/evidence/phase4-kind-deploy.md` | kind cluster creation, deployment apply, rollout status, smoke tests via port-forward |
 | `docs/evidence/phase6-measurements.md` | Baseline vs optimised build/stop/deploy timings |
 | `docs/evidence/phase7-rollback-drill.md` | Three failure drills: bad image tag, failing readiness probe, failing unit test |
-| `docs/evidence/phase5-jenkins-ci.md` | Jenkins provisioning (controller, 71 plugins, agent node, credentials) + build #1 FAILURE (buildx) and build #2 SUCCESS logs |
+| `docs/evidence/phase5-jenkins-ci.md` | Jenkins provisioning (controller, 71 plugins, agent node, credentials) + build #1 FAILURE (buildx), build #2 harness SUCCESS, and **build #3 authoritative end-to-end** (real push → deploy → smoke, digest round-trip proof) |
 
 No evidence file contains a token, password, private key or kubeconfig
-content. The Docker Hub auth status is recorded only as "absent".
+content. Docker Hub credentials appear only as masked `****` in console excerpts
+(and by credential ID); the pushed image digest is public registry metadata, not
+a secret.
 
-## 3. Status of the two items that were BLOCKED after Phase 4
+## 3. Status of the two items that were BLOCKED after Phase 4 (both now RESOLVED)
 
 ### A18 — Jenkins pipeline — RESOLVED (verification build green)
 
@@ -72,35 +74,39 @@ pipeline build to **SUCCESS**:
   (2 pass) → Docker build (BuildKit) → read-only `kubeconfig-dev` cluster check
   (`demo-web 2/2 READY`). Evidence: `docs/evidence/phase5-jenkins-ci.md`.
 
-**Caveat (source strategy).** The working tree is uncommitted (`HEAD = cc5480d`),
-so a git `checkout scm` would build the *old* draft Jenkinsfile. Committing to
-the repo needs explicit approval and was not done. The verification job therefore
-sources the current tree from a read-only bind mount (`/repo-src`, excluding
-`.jenkins-setup/` and `.venv/`) and runs the same stages; Publish / Deploy /
-Smoke are skipped. A fully SCM-driven run needs a commit (+ push) — see
-`docs/deployment-guide.md` §5.4.
+**Source strategy (updated).** Build #2 above used a read-only bind-mount harness
+while the tree was uncommitted. The tree is now committed (approved: *commit
+locally, no remote push*; `HEAD = 9b93e21`), so the authoritative multibranch job
+`devops-case-study` runs the repo's real `Jenkinsfile` via `checkout scm` from
+`file:///repo-src` (repo mounted read-only into the controller). Its build **#3**
+is the full end-to-end run recorded in A19 below and
+`docs/evidence/phase5-jenkins-ci.md` §5.
 
-### A19 — Docker Hub push — still BLOCKED (token only)
+### A19 — Docker Hub push — RESOLVED (real push verified)
 
-**Progress since Phase 4.** The namespace is now known (`21520623`): it replaced
-the `DOCKERHUB_USERNAME` placeholder in `k8s/deployment.yaml`, the kind overlay,
-`README.md` and the `Jenkinsfile`, and is stored as the `dockerhub-username`
-Jenkins credential.
+The namespace (`21520623`) replaced the `DOCKERHUB_USERNAME` placeholder in
+`k8s/deployment.yaml`, the kind overlay, `README.md` and the `Jenkinsfile`, and is
+stored as the `dockerhub-username` Jenkins credential. The operator then added the
+`dockerhub-creds` *Username with password* credential (Docker Hub user `21520623`
++ **access token**, never the account password); its auto-generated UUID ID was
+normalized to `dockerhub-creds` — the ID the `Jenkinsfile` references.
 
-**Remaining blocker.** The `dockerhub-creds` *Username with password* credential
-(Docker Hub user `21520623` + **access token**, never the account password) is
-not configured. Per the operator's "Jenkins credential only" choice, no
-`docker login` was performed on the host. Secrets cannot be received in chat, so
-this must be added via the Jenkins UI:
+Multibranch build **#3** (`devops-case-study/main` @ `9b93e21`) then ran the
+Publish stage for real:
 
-    Manage Jenkins → Credentials → System → Global credentials → Add Credentials
-    Kind: Username with password · ID: dockerhub-creds
-    Username: 21520623 · Password: <Docker Hub access token>
+    docker login --username **** --password-stdin   → Login Succeeded
+    docker push ****/devops-demo-web:9b93e2104bec   → digest sha256:dc269a5a…6150 size 856
+    docker push ****/devops-demo-web:latest         → digest sha256:dc269a5a…6150
 
-Once it exists (and the tree is committed), the authoritative `Jenkinsfile`
-pushes `21520623/devops-demo-web:<git-sha>` and `:latest` on `main`, then deploys
-and smoke-tests automatically. The kind overlay can then switch `imagePullPolicy`
-back to `Always` and drop the `kind load` step.
+**Round-trip proof.** The Deploy stage set the kind deployment to that Hub tag;
+because the tag was never `kind load`ed, the node pulled it from Docker Hub, and
+the running pods' `imageID` is
+`docker.io/21520623/devops-demo-web@sha256:dc269a5a…6150` — identical to the
+pushed digest. Evidence: `docs/evidence/phase5-jenkins-ci.md` §5 / §5.1.
+
+Optional next step (not required for acceptance): the kind overlay can switch
+`imagePullPolicy` back to `Always` and drop the `kind load` step now that images
+are published to Docker Hub.
 
 ## 4. What was deliberately **not** changed
 

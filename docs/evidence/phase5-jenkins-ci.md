@@ -4,9 +4,21 @@ Date: 2026-10-13 (UTC) · Host: `ubuntu` (Ubuntu 24.04.3, 8 vCPU / 11 GiB)
 Jenkins: `jenkins/jenkins:lts-jdk17`, version **2.541.3**, bound to **127.0.0.1:8080 / 127.0.0.1:50000** (loopback only).
 Agent: `devops-case-study-jenkins-agent:latest` (inbound JNLP), label `linux-docker-agent`.
 
+> **Authoritative result (updated 2026-10-14):** the multibranch job
+> `devops-case-study` ran the repository `Jenkinsfile` end-to-end on `main`
+> @ `9b93e21` — **build #3 SUCCESS in ~118 s**. Unit tests passed (2/2), image
+> built (186 MB, digest `sha256:dc269a5a…6150`), **pushed to Docker Hub**
+> (`21520623/devops-demo-web:9b93e2104bec` + `:latest`), deployed to kind
+> (2/2 Ready) which **pulled the same digest back from the registry**, and the
+> smoke test returned **HTTP 200** on `/health` and `/`. Full evidence in **§5**.
+>
+> §3–§4 below are the earlier read-only CI-harness runs (job `devops-demo-web`)
+> kept as historical record; **§5 is the authoritative end-to-end run.**
+
 > All secret values are masked by Jenkins as `****` in the logs below. No token,
 > password, kubeconfig content, or JNLP secret appears in this file. The raw
-> console logs live in the gitignored `.jenkins-setup/build{1,2}-console.log`.
+> console logs live in the gitignored `.jenkins-setup/` dir
+> (`build1-console.log`, `build2-console.log`, `build-scm-3.log`).
 
 ## 1. What was provisioned (all verified by command)
 
@@ -20,8 +32,9 @@ Agent: `devops-case-study-jenkins-agent:latest` (inbound JNLP), label `linux-doc
 | Agent → kind API | Reachable & authenticated | `/version` → k8s v1.34.0; in-build `kubectl cluster-info` (see §4) |
 | Credential `dockerhub-username` | String/text credential (namespace `21520623`) | Groovy credential listing |
 | Credential `kubeconfig-dev` | File credential (kind **internal** kubeconfig, 5640 bytes) | Groovy credential listing; used in build #2 |
-| Credential `dockerhub-creds` | **ABSENT — BLOCKED** (operator must add Docker Hub token via UI) | Groovy `dockerhub-creds present: false` |
-| Job `devops-demo-web` | Pipeline, buildable | REST `createItem` → HTTP 200 |
+| Credential `dockerhub-creds` | **PRESENT** — Username/password: user `21520623` + Docker Hub **access token** (operator-added via UI, ID normalized to `dockerhub-creds`) | Groovy `dockerhub-creds present: true`; build #3 `docker login` → `Login Succeeded` |
+| Job `devops-demo-web` | Pipeline (read-only CI harness; builds #1–#2, §3–§4) | REST `createItem` → HTTP 200 |
+| Job `devops-case-study` | **Multibranch Pipeline** on `file:///repo-src`; discovers `main`; runs the authoritative `Jenkinsfile` | Groovy create + index; build **#3 SUCCESS** (real push + deploy, §5) |
 
 Plugins installed (the ones the `Jenkinsfile` depends on):
 `git`, `git-client`, `workflow-aggregator`, `pipeline-model-definition`,
@@ -30,24 +43,36 @@ Plugins installed (the ones the `Jenkinsfile` depends on):
 `junit`, `timestamper`, `ws-cleanup`, `scm-api`, `branch-api`, `structs`,
 `script-security`, `matrix-project`, `cloudbees-folder` (+ their API deps).
 
-## 2. Job source strategy (important caveat)
+## 2. Job source strategy (two jobs, and why)
 
-The repository working tree is **uncommitted** (`HEAD = cc5480d`, "Initial DevOps
-case study"). A git-based `checkout scm` therefore only sees `cc5480d`, whose
-`Jenkinsfile` is the older draft (placeholder `DOCKERHUB_USERNAME`, flat
-manifests, no kustomize overlay). Committing to the user's repo was **not** done
-(requires explicit approval).
+Two Jenkins jobs exist, reflecting how the work progressed:
 
-To produce real evidence against the **current** code without committing, the job
-`devops-demo-web` uses a bind-mounted, read-only view of the working tree
-(`/repo-src`) and runs the *same* Validate → Unit tests → Build stages as the
-authoritative `Jenkinsfile`, plus a **read-only** `kubeconfig-dev` cluster check.
-The `.jenkins-setup/` directory (which holds setup secrets) and `.venv/` are
-excluded from the copy, so no secret enters the workspace.
+1. **`devops-demo-web`** (Pipeline, §3–§4) — an early **read-only CI harness**,
+   used while the working tree was still uncommitted and `dockerhub-creds` was
+   not yet available. It bind-mounts the tree at `/repo-src` and runs
+   Validate → Unit tests → Build (plus a read-only cluster check); Publish /
+   Deploy / Smoke were intentionally **skipped** at that time. Kept for history.
 
-`Publish → Deploy → Smoke` are intentionally **SKIPPED**: they require the
-`dockerhub-creds` token (push) and a committed/pushed tree. To run the full
-SCM-driven pipeline, see `docs/deployment-guide.md` §5.4.
+2. **`devops-case-study`** (Multibranch Pipeline, §5) — the **authoritative**
+   job. The tree is now committed (approved: *commit locally, no push*;
+   `HEAD = 9b93e21`) and the repo is mounted read-only into the controller at
+   `/repo-src`, so the multibranch source `file:///repo-src` discovers `main`
+   and runs the repository's real `Jenkinsfile` via `checkout scm` — with
+   `BRANCH_NAME=main` set, which the declarative `when { branch 'main' }` guards
+   on Publish/Deploy/Smoke require. This job runs the **full** pipeline
+   including a real Docker Hub push. See `docs/deployment-guide.md` §5.4.
+
+`.jenkins-setup/` (setup secrets, raw logs) and `.venv/` are gitignored and are
+never part of `checkout scm`, so no secret enters a build workspace.
+
+> **Build-gate note (fixed before build #3).** The `Build image` stage originally
+> used a declarative `changeset` guard. Because `cleanWs(deleteDirs:true)` wipes
+> the workspace every build, the git plugin computed an **empty changelog** and
+> `changeset` never matched — multibranch builds **#1 and #2 returned SUCCESS but
+> skipped Build → Publish → Deploy → Smoke** ("Warning, empty changelog"). Fixed
+> in commit `9b93e21` by deciding with `git diff --name-only HEAD~1 HEAD`
+> instead (a fresh clone still has full history). Build #3 is the first run that
+> executed every stage. Recorded as troubleshooting item **T14**.
 
 ## 3. Build #1 — FAILURE (root cause: missing buildx)
 
@@ -137,25 +162,129 @@ Build result: SUCCESS
 Finished: SUCCESS
 ```
 
-## 5. Security notes observed in this run
+## 5. Build #3 — authoritative SCM-driven end-to-end (multibranch, REAL push) ✅
 
-- Credential values were masked in every `sh` invocation (`****/devops-demo-web:ci-2`,
-  `export KUBECONFIG=****`). Jenkins also warned that `withEnv` received a secret
-  via Groovy interpolation — expected for the `environment { credentials(...) }`
-  pattern and non-leaking (value stays masked).
+The multibranch job `devops-case-study` discovered branch `main` at commit
+**`9b93e21`** and ran the repository's real `Jenkinsfile` unchanged. **All eight
+stages executed** (none skipped); the build finished **SUCCESS in ~118 s**
+(`durMs=118203`), pushing to Docker Hub and deploying the pushed image to kind,
+which pulled it back from the registry.
+
+Checkout (`checkout scm` from `file:///repo-src`):
+```
+Obtained Jenkinsfile from 9b93e2104becbf1cb89950c8f4141b73c972a2e0
+Checking out Revision 9b93e2104becbf1cb89950c8f4141b73c972a2e0 (main)
+Building from commit 9b93e2104bec
+```
+
+Unit tests (ran in parallel with Build image):
+```
++ python -m unittest discover -s app/tests -v
+test_health (test_app.AppTests.test_health) ... ok
+test_home (test_app.AppTests.test_home) ... ok
+Ran 2 tests in 0.008s
+```
+
+Build image (BuildKit via buildx; Hub namespace masked as `****`):
+```
++ docker build --pull --tag ****/devops-demo-web:9b93e2104bec --tag ****/devops-demo-web:latest \
+    --label org.opencontainers.image.revision=9b93e2104bec... --label ...source=file:///repo-src .
+#14 exporting manifest list sha256:dc269a5a81963340bc9e1701db5c27e6f16dc7f74c30d11f979f204a2ba76150 done
+built image id=sha256:dc269a5a81963340bc9e1701db5c27e6f16dc7f74c30d11f979f204a2ba76150 size=186348946
+```
+
+**Publish image — REAL push to Docker Hub** (`dockerhub-creds`; user + token masked):
+```
++ docker login --username **** --password-stdin
+Login Succeeded
++ docker push ****/devops-demo-web:9b93e2104bec
+The push refers to repository [docker.io/****/devops-demo-web]
+...(12 layers)... Pushed
+9b93e2104bec: digest: sha256:dc269a5a81963340bc9e1701db5c27e6f16dc7f74c30d11f979f204a2ba76150 size: 856
++ docker push ****/devops-demo-web:latest
+latest: digest: sha256:dc269a5a81963340bc9e1701db5c27e6f16dc7f74c30d11f979f204a2ba76150 size: 856
+```
+
+**Deploy to Kubernetes** (`kubeconfig-dev`; kind internal API, agent → control-plane):
+```
++ export KUBECONFIG=****
+Kubernetes control plane is running at https://devops-demo-control-plane:6443
++ kubectl -n devops-demo set image deployment/demo-web demo-web=****/devops-demo-web:9b93e2104bec
+deployment.apps/demo-web image updated
++ kubectl -n devops-demo rollout status deployment/demo-web --timeout=180s
+deployment "demo-web" successfully rolled out
+demo-web-6dcf87d5f8-c8vfn   1/1   Running   0   3s
+demo-web-6dcf87d5f8-xwhc9   1/1   Running   0   12s
+```
+
+**Smoke test** (loopback `port-forward` only — no public port opened):
+```
++ kubectl -n devops-demo port-forward --address 127.0.0.1 svc/demo-web 18082:80
+--- /health ---
+{"status":"ok"}
+HTTP=200 time=0.002752s
+--- / ---
+{"message":"Hello from Kubernetes","service":"demo-web","version":"k8s"}
+HTTP=200
+smoke test ok
+```
+
+Result:
+```
+Build result: SUCCESS
+Pipeline succeeded for ****/devops-demo-web:9b93e2104bec
+Finished: SUCCESS
+```
+
+### 5.1 Registry round-trip proof (pushed digest == running-pod digest)
+
+Verified independently on the kind node **after** the build. The pods run the
+exact digest that was pushed, in `RepoDigest` (`docker.io/...@sha256:`) form —
+which only appears for **registry-pulled** images. The tag `9b93e2104bec` was
+built on the host daemon and was **never** `kind load`ed into the node, so a
+successful rollout can only mean the node pulled it from Docker Hub:
+```
+$ kubectl -n devops-demo get deploy demo-web -o jsonpath='{..image}'
+21520623/devops-demo-web:9b93e2104bec        (imagePullPolicy: IfNotPresent, readyReplicas 2/2)
+
+$ kubectl -n devops-demo get pods -l app=demo-web -o jsonpath='{..imageID}'
+docker.io/21520623/devops-demo-web@sha256:dc269a5a81963340bc9e1701db5c27e6f16dc7f74c30d11f979f204a2ba76150
+docker.io/21520623/devops-demo-web@sha256:dc269a5a81963340bc9e1701db5c27e6f16dc7f74c30d11f979f204a2ba76150
+```
+Pushed digest `sha256:dc269a5a…6150` (console lines 441 & 541) **==** the
+running pods' `imageID` digest ⇒ the full **build → push → pull → deploy →
+smoke** loop is proven with real artifacts, not simulation.
+
+## 6. Security notes observed in this run
+
+- Credential values were masked in every `sh` invocation across all builds
+  (`****/devops-demo-web:9b93e2104bec`, `docker login --username ****
+  --password-stdin`, `export KUBECONFIG=****`). In build #3 the Docker Hub token
+  was consumed only inside `withCredentials(...) { }` and piped via
+  `--password-stdin` (never as a CLI argument), with `docker logout` on an EXIT
+  trap. Jenkins also warned that `withEnv`/`echo` received a secret via Groovy
+  interpolation — expected for the `environment { credentials(...) }` pattern and
+  non-leaking (the value stays masked as `****`).
 - The controller is loopback-only; the agent reaches it over the internal compose
-  network. No port was opened to the LAN/Internet.
+  network; the smoke test used `kubectl port-forward --address 127.0.0.1`. No port
+  was opened to the LAN/Internet at any point.
 - The agent holds the host Docker socket (documented: any job here is effectively
   host-root). Only trusted pipelines run here.
 
-## 6. Remaining blockers for a full end-to-end (push) run
+## 7. Blockers RESOLVED (previously: full end-to-end push)
 
-1. **`dockerhub-creds`** — a Jenkins *Username with password* credential holding
-   the Docker Hub user `21520623` + an **access token** (never the account
-   password). Operator must add it via the UI (I cannot receive secrets).
-2. **Committed source** — for `checkout scm` to build the *current* pipeline, the
-   working tree must be committed (and pushed if the SCM is GitHub). Requires
-   explicit approval; not done unilaterally.
+Both former blockers for an authoritative push run are now cleared:
 
-Once both exist, the authoritative `Jenkinsfile` runs Publish → Deploy → Smoke
-unchanged, pushing `21520623/devops-demo-web:<git-sha>` and `:latest`.
+1. **`dockerhub-creds`** — RESOLVED. The operator added a Docker Hub
+   *Username with password* credential (user `21520623` + **access token**, never
+   the account password) via the UI; its auto-generated UUID ID was normalized to
+   `dockerhub-creds` (the ID the `Jenkinsfile` references). Build #3 used it:
+   `docker login` → `Login Succeeded`, then a real push.
+2. **Committed source** — RESOLVED. Approved as *commit locally, no remote push*;
+   `HEAD = 9b93e21`. The repo is mounted read-only into the controller so the
+   multibranch `file:///repo-src` source can index `main` and run the real
+   `Jenkinsfile` via `checkout scm`.
+
+Result: the authoritative `Jenkinsfile` ran Publish → Deploy → Smoke unchanged,
+pushing `21520623/devops-demo-web:9b93e2104bec` + `:latest` and deploying the
+pushed digest to kind (build #3, SUCCESS). **No remaining Phase 5 blockers.**

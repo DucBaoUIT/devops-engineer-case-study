@@ -141,8 +141,8 @@ Container user: 10001 (non-root)   Health: healthy
 
 | # | Item | Severity | Mitigation |
 | --- | --- | --- | --- |
-| R1 | Docker Hub credentials not configured (`~/.docker/config.json` absent) | High for Phase 5 push | Ask user for Docker Hub namespace + `docker login` locally, or store as Jenkins credential `dockerhub-creds`. Never commit tokens. |
-| R2 | Docker Hub **username/namespace** unknown — placeholder `DOCKERHUB_USERNAME` in `Jenkinsfile` and `k8s/deployment.yaml` | High | Ask user (single question, see §11). |
+| R1 | Docker Hub credentials not configured (`~/.docker/config.json` absent) | High for Phase 5 push | **RESOLVED (Phase 5):** operator added Jenkins credential `dockerhub-creds` (user `21520623` + access token) via the UI; build #3 `docker login` → push succeeded. No token committed, no host `docker login`. |
+| R2 | Docker Hub **username/namespace** unknown — placeholder `DOCKERHUB_USERNAME` in `Jenkinsfile` and `k8s/deployment.yaml` | High | **RESOLVED (Phase 5):** namespace = `21520623`; replaced the placeholder in the manifests, overlay, README and Jenkinsfile, and stored as the `dockerhub-username` credential. |
 | R3 | Jenkins service in `docker-compose.yml` binds `0.0.0.0:8080` and `0.0.0.0:50000` with no host firewall | Medium (LAN-only in practice) | Change to `127.0.0.1:8080:8080` / `127.0.0.1:50000:50000` and access via SSH tunnel; get approval before starting. |
 | R4 | No Jenkins agent image with Docker CLI + kubectl + Python; controller image alone cannot run pipeline `sh` steps that need Docker socket | Medium | Two safe options: (a) mount `/var/run/docker.sock` into an *agent* container (never the controller running untrusted jobs); (b) use Kaniko/Buildah for socket-less builds. Ask user preference. |
 | R5 | `pip3` and `jq` not installed on host | Low | Use `python3 -m pip` and `python3 -c "import json…"`; install only if required. |

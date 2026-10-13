@@ -372,3 +372,91 @@ build time so a missing plugin fails the image build, not the pipeline.
 the `docker.io` apt package, and the Docker Inc. repo bundle different sets
 of CLI plugins. When a build needs BuildKit features, verify `docker buildx
 version` explicitly — do not assume it ships with the `docker` binary.
+
+## T14. Multibranch build is SUCCESS but every stage after Validate is skipped
+
+**Symptom.** Multibranch builds **#1 and #2** of `devops-case-study/main`
+returned `SUCCESS` in ~12–20 s, but *Build image → Publish → Deploy → Smoke*
+were all skipped. Console:
+```
+Warning, empty changelog. Probably because this is the first build.
+Stage "Build image" skipped due to when conditional
+```
+
+**Diagnosis.** The *Build image* stage used a declarative
+`when { changeset "app/**,Dockerfile,..." }` guard. `changeset` is evaluated
+against the SCM **changelog**. But `post { cleanup { cleanWs(deleteDirs: true) } }`
+wipes the workspace at the end of *every* build, so each build begins with a
+fresh clone — and on a fresh clone the git plugin records an **empty
+changelog** (it has no prior in-workspace state to diff against). Empty
+changelog ⇒ `changeset` matches nothing ⇒ *Build image* skipped ⇒
+`env.IMAGE_BUILT` never set ⇒ *Publish/Deploy/Smoke* (guarded on it) skipped too.
+
+**Root cause.** `cleanWs(deleteDirs: true)` and a `changeset` gate are
+incompatible. Worse, the build still reports SUCCESS — a green run that silently
+skips the important stages.
+
+**Fix applied (commit `9b93e21`).** Decide with `git` directly against the
+previous commit — a fresh clone still has full history — and make the fallback
+*build* (fail-safe), not *skip*:
+```groovy
+when {
+  expression {
+    def out = sh(returnStdout: true,
+      script: 'git diff --name-only HEAD~1 HEAD 2>/dev/null || echo __BUILD__').trim()
+    if (!out || out.contains('__BUILD__')) { return true }   // first commit / unknown -> build
+    return out.split('\n').any { p ->
+      p == 'Dockerfile' || p == '.dockerignore' || p == 'Jenkinsfile' ||
+      p.startsWith('app/') || p.startsWith('k8s/') || p.startsWith('scripts/')
+    }
+  }
+}
+```
+
+**Result.** Build **#3** ran all eight stages end-to-end (real push + deploy +
+smoke) — `docs/evidence/phase5-jenkins-ci.md` §5.
+
+**Lesson.** `changeset` relies on the SCM changelog, which is empty whenever the
+workspace is cleaned between builds (and on any first build). If you both
+`cleanWs` and gate on changed paths, use `git diff HEAD~1 HEAD` instead, with a
+fail-safe default of *build*. And treat a suspiciously fast SUCCESS skeptically —
+confirm the stages actually ran before believing the result.
+
+## T15. `file://` multibranch SCM → "detected dubious ownership in repository at '/repo-src/.git'"
+
+**Symptom.** Multibranch indexing (and the agent `checkout scm`) of
+`file:///repo-src` failed with git *"detected dubious ownership"* / could not
+read from the remote repository.
+
+**Diagnosis.** The repo is bind-mounted read-only into the controller and agent
+containers at `/repo-src`. The mount is owned by root (host uid 0), but Jenkins
+runs git as uid 1000 (`jenkins`). Since git 2.35.2, git refuses to operate on a
+repository owned by a different user unless the path is allow-listed in
+`safe.directory`. Two extra gotchas found the hard way:
+- `safe.directory` set via `GIT_CONFIG_*` env vars or `git -c safe.directory=…`
+is **ignored** — git only honors it from **system** or **global** config.
+- For a `file://` remote pointing at a non-bare repo, the path git checks is the
+**gitdir** (`/repo-src/.git`), not the worktree (`/repo-src`).
+
+**Fix applied.** Allow-list both paths in **system** git config — baked into the
+agent image, and set live on the controller (indexing + Jenkinsfile loading run
+on the controller flyweight, not the agent):
+```dockerfile
+# jenkins-agent.Dockerfile (as root, before USER jenkins)
+RUN git config --system --add safe.directory /repo-src \
+ && git config --system --add safe.directory /repo-src/.git
+```
+```bash
+# controller (one-off, live):
+docker exec -u root devops-case-study-jenkins-1 \
+  git config --system --add safe.directory /repo-src
+docker exec -u root devops-case-study-jenkins-1 \
+  git config --system --add safe.directory /repo-src/.git
+```
+Verified: `git ls-remote file:///repo-src` succeeds from both agent and
+controller as uid 1000 (the agent image build also asserts this now).
+
+**Lesson.** When Jenkins (uid 1000) reads a root-owned bind-mounted repo,
+pre-approve the path via **system/global** `safe.directory` (env/`-c` overrides
+are ignored), and remember to do it on the **controller** too — that is where
+multibranch branch discovery and Jenkinsfile retrieval actually execute.

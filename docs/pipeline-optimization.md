@@ -136,10 +136,10 @@ Full table in `docs/evidence/phase6-measurements.md`. Headline numbers:
 
 | Item | Why deferred |
 | --- | --- |
-| Registry-based BuildKit cache (`--cache-from type=registry,ref=…:buildcache`) | Requires Docker Hub credentials. The Jenkinsfile is shaped so this can be added with a one-line change once `dockerhub-creds` exists. |
+| Registry-based BuildKit cache (`--cache-from type=registry,ref=…:buildcache`) | The credential prerequisite is now met (`dockerhub-creds` exists; build #3 pushes to Docker Hub), but the registry cache itself is **not implemented or measured** — it stays a candidate next optimization, not a claimed result. |
 | Multi-stage build to shrink the image further | For a Flask app with one runtime dependency the saving is < 5 MB and adds a stage. Not worth the complexity for the case study. |
 | `docker buildx bake` | Only useful when building multiple images. We build one. |
-| Kaniko / Buildah socket-less build | Would remove the need to mount the Docker socket into a Jenkins agent. Deferred until the agent strategy is decided (see `docs/deployment-guide.md` §5.1). |
+| Kaniko / Buildah socket-less build | The agent strategy is now **decided** (dedicated `linux-docker-agent` with the Docker socket mounted — see `docs/deployment-guide.md` §5.1). Kaniko/Buildah remains an optional hardening step to remove the socket mount; not required for the case study. |
 | Helm chart | Kustomize with two overlays is enough and keeps the manifests greppable during an interview walkthrough. |
 | Auto-rollback on smoke-test failure | A single curl is not a sufficient signal to roll back a production deployment. The pipeline prints the exact rollback command in the `post { failure }` block instead. |
 | Prometheus / Grafana / metrics-server | Out of scope. The absence of `kubectl top` is documented in `docs/troubleshooting.md` T9 rather than hidden. |

@@ -171,12 +171,11 @@ Nothing else on the host is touched.
 **Status on this VPS:** Jenkins **is running** — controller `2.541.3`
 (`jenkins/jenkins:lts-jdk17`) bound to `127.0.0.1:8080` / `127.0.0.1:50000`
 only, with a dedicated inbound agent `linux-docker-agent` (online, 2
-executors) and a **green** CI verification build (`devops-demo-web` #2,
-SUCCESS, 16.09 s). Full evidence: `docs/evidence/phase5-jenkins-ci.md`.
-
-One acceptance item remains **BLOCKED**: **A19** (push to Docker Hub) needs
-the `dockerhub-creds` access-token credential, which the operator must add
-via the UI (an assistant cannot receive secrets). See §5.4.
+executors). The **authoritative** Multibranch Pipeline `devops-case-study`
+ran the repository `Jenkinsfile` on `main` to **SUCCESS end-to-end** (build
+**#3**, ~118 s): build → **push to Docker Hub** → deploy to kind → smoke
+test. **All acceptance items, including A19 (Docker Hub push), now PASS.**
+Full evidence: `docs/evidence/phase5-jenkins-ci.md` §5.
 
 The `jenkins` and `jenkins-agent` services are behind the `jenkins` compose
 profile, so a plain `docker compose up` does **not** start them.
@@ -191,9 +190,10 @@ profile, so a plain `docker compose up` does **not** start them.
 | Agent toolchain | docker 27.5.1 (+ host daemon 29.9.0), **buildx v0.38.0**, kubectl v1.34.0, kind v0.30.0, python 3.13.5, git 2.47.3 | `docker exec … version` |
 | Agent → kind API | Reachable & authenticated over the `kind` network | in-build `kubectl cluster-info` |
 | Credential `dockerhub-username` | Secret text = namespace `21520623` | Groovy credential listing |
-| Credential `kubeconfig-dev` | Secret file = kind **internal** kubeconfig (5640 B) | used in build #2 |
-| Credential `dockerhub-creds` | **ABSENT — BLOCKED** (operator adds token via UI) | Groovy `present: false` |
-| Job `devops-demo-web` | Pipeline, build #2 SUCCESS | REST `lastBuild/api/json` |
+| Credential `kubeconfig-dev` | Secret file = kind **internal** kubeconfig (5640 B) | used in builds #2 and #3 |
+| Credential `dockerhub-creds` | **PRESENT** — user `21520623` + access token (operator-added via UI; UUID ID normalized to `dockerhub-creds`) | build #3 `docker login` → `Login Succeeded` |
+| Job `devops-demo-web` | Pipeline (read-only CI harness), build #2 SUCCESS | REST `lastBuild/api/json` |
+| Job `devops-case-study` | **Multibranch Pipeline** on `file:///repo-src`; build **#3 SUCCESS** end-to-end (push + deploy + smoke) | Groovy index + REST console |
 
 ### 5.2 How it was brought up (repeatable)
 
@@ -237,17 +237,17 @@ To reach the UI, open an SSH tunnel (do **not** widen the bind):
 ssh -L 8080:127.0.0.1:8080 user@vps   # then http://127.0.0.1:8080
 ```
 
-### 5.3 The pipeline job today (CI verification harness)
+### 5.3 The first pipeline job (read-only CI verification harness)
 
-The repository working tree is **uncommitted** (`HEAD = cc5480d`), whose
-committed `Jenkinsfile` is an older draft. Committing to your repo was not
-done unilaterally. So the `devops-demo-web` job proves the pipeline against
-the **current** tree without committing: the agent bind-mounts the working
-tree read-only at `/repo-src`, copies it into the workspace (excluding
-`.venv/` and `.jenkins-setup/` so no secret enters the build), and runs the
-real **Validate → Unit tests → Build image** stages plus a **read-only**
-`kubeconfig-dev` cluster check. `Publish → Deploy → Smoke` are intentionally
-**SKIPPED**. Build #2 result (verified):
+Before the tree was committed and `dockerhub-creds` existed, the
+`devops-demo-web` job proved the pipeline against the **then-current** working
+tree without committing: the agent bind-mounted the tree read-only at
+`/repo-src`, copied it into the workspace (excluding `.venv/` and
+`.jenkins-setup/` so no secret entered the build), and ran the real
+**Validate → Unit tests → Build image** stages plus a **read-only**
+`kubeconfig-dev` cluster check. `Publish → Deploy → Smoke` were intentionally
+**SKIPPED** in that harness. It is kept for history; the authoritative
+end-to-end run is the multibranch job in §5.4. Build #2 result (verified):
 
 ```
 Validate repo        ok (required files present, no secret-like file tracked, Dockerfile has USER)
@@ -258,18 +258,19 @@ Publish/Deploy/Smoke SKIPPED (policy)
 Finished: SUCCESS    (16.09 s)
 ```
 
-The **authoritative** pipeline is the repository `Jenkinsfile` (6 stages,
-SHA-based immutable tags, `when { changeset }` gating, `branch 'main'`
-publish gate, port-forward smoke test). §5.4 explains how to switch the job
-onto it.
+The **authoritative** pipeline is the repository `Jenkinsfile` (Checkout →
+Validate → Unit tests ‖ Build → Publish → Deploy → Smoke; SHA-based immutable
+tags, a `git diff`-based build gate, a `branch 'main'` publish/deploy gate, and
+a loopback port-forward smoke test). §5.4 documents how the multibranch job was
+wired onto it (and now runs it for real).
 
-### 5.4 Switch to the authoritative SCM-driven `Jenkinsfile` (+ unblock push)
+### 5.4 How the authoritative SCM-driven pipeline was wired (as built)
 
-Two things are required; both need operator action:
+The `devops-case-study` **Multibranch Pipeline** runs the repository `Jenkinsfile`
+end-to-end. Reproduce it as follows:
 
-1. **Add the `dockerhub-creds` credential** (unblocks Publish → Deploy →
-   Smoke, acceptance item **A19**). In the UI: *Manage Jenkins → Credentials
-   → System → Global → Add Credentials*:
+1. **`dockerhub-creds` credential** (Publish → Deploy → Smoke, acceptance
+   **A19**). *Manage Jenkins → Credentials → System → Global → Add Credentials*:
    - Kind: **Username with password**
    - ID: `dockerhub-creds`
    - Username: `21520623`
@@ -277,27 +278,33 @@ Two things are required; both need operator action:
 
    The `Jenkinsfile` consumes it via
    `withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', …)])`.
-   `dockerhub-username` (namespace) and `kubeconfig-dev` already exist.
+   `dockerhub-username` (namespace) and `kubeconfig-dev` also exist. (The
+   operator originally added this credential with an auto-generated UUID ID; it
+   was normalized to `dockerhub-creds` — the ID the `Jenkinsfile` references.)
 
-2. **Point the job at SCM** so `checkout scm` builds the current pipeline.
-   The working tree must be committed (and pushed if the SCM is remote).
-   Then either:
-   - Edit `devops-demo-web` → *Pipeline → Definition: Pipeline script from
-     SCM* → Git, your repo URL + a read-only SCM credential, Script Path
-     `Jenkinsfile`; **or**
-   - Create a **Multibranch Pipeline** (`devops-case-study`) with
-     *Build Configuration → by Jenkinsfile*. Branch indexing discovers
-     `main`.
+2. **Commit the tree and expose it to Jenkins as SCM.** Approved as *commit
+   locally, no remote push* (`HEAD = 9b93e21`). The repo is bind-mounted
+   **read-only** into the controller and agent at `/repo-src` (see
+   `docker-compose.yml`), and the multibranch source is `file:///repo-src` with
+   *Branch Discovery* + *Build Configuration → by Jenkinsfile* (Script Path
+   `Jenkinsfile`). Branch indexing discovers `main` and sets `BRANCH_NAME=main`,
+   which the declarative `when { branch 'main' }` gates require.
 
-   The pipeline still requires the `linux-docker-agent` label (already
-   online). On `main`, with `dockerhub-creds` present, it pushes
-   `21520623/devops-demo-web:<git-sha>` and `:latest`, deploys via the
+   Two setup details were necessary (both recorded in `docs/troubleshooting.md`):
+   - **git `safe.directory`** for the root-owned `/repo-src` mount, set in
+     **system** config on the controller *and* baked into the agent image
+     (indexing / Jenkinsfile loading run on the controller flyweight) — **T15**.
+   - The build gate had to move from `changeset` to `git diff HEAD~1 HEAD`,
+     because `cleanWs(deleteDirs:true)` makes the changelog empty every build —
+     **T14**.
+
+   The pipeline needs the `linux-docker-agent` label (online). On `main` it
+   pushes `21520623/devops-demo-web:<git-sha>` + `:latest`, deploys via the
    `kubeconfig-dev` overlay, and smoke-tests over a loopback port-forward.
 
-> **Why not done automatically:** committing to your repo and supplying a
-> registry token both require explicit approval / a secret I must not
-> handle. Everything credential-independent in Phase 5 is complete and
-> verified.
+**Result (verified):** build **#3 = SUCCESS** — pushed digest
+`sha256:dc269a5a…6150`, kind pulled the same digest back, `/health` returned
+200. See `docs/evidence/phase5-jenkins-ci.md` §5 / §5.1.
 
 ### 5.5 Generate a namespace-scoped kubeconfig for Jenkins
 
@@ -343,9 +350,10 @@ Build result: SUCCESS
 
 ## 6. Docker Hub publish
 
-Once `dockerhub-creds` exists, the Publish stage runs `docker push
-"$IMAGE_REF"` and `docker push "$IMAGE_LATEST"` automatically on `main`.
-To push manually for the first time (e.g. to seed the repository):
+The Publish stage runs `docker push "$IMAGE_REF"` and `docker push
+"$IMAGE_LATEST"` automatically on `main` (verified in build #3 — the repository
+`21520623/devops-demo-web` now exists on Docker Hub). To push manually instead
+(e.g. to seed a repository):
 
 ```bash
 docker login                              # prompts, no shell history

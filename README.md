@@ -5,14 +5,15 @@ a local Kubernetes lab on `kind`, a Jenkins CI/CD pipeline, image
 publishing to Docker Hub, rollout/rollback, pipeline optimisation, and the
 evidence to prove all of it actually ran.
 
-> **Interview-ready status.** 21 of 22 acceptance items PASS with recorded
-> evidence, including a **green Jenkins CI build** (controller + agent +
-> credentials + pipeline — see
-> [`docs/evidence/phase5-jenkins-ci.md`](docs/evidence/phase5-jenkins-ci.md)).
-> The one BLOCKED item — Docker Hub **push** — needs the operator to add the
-> `dockerhub-creds` access token (documented in
-> [`docs/validation-report.md`](docs/validation-report.md) §3); it is not a
-> technical failure.
+> **Interview-ready status.** **22 of 22** acceptance items PASS with recorded
+> evidence, including a **full end-to-end Jenkins CI/CD run**: the multibranch
+> pipeline built the image, **pushed it to Docker Hub**
+> (`21520623/devops-demo-web:9b93e2104bec`, digest `sha256:dc269a5a…6150`),
+> deployed it to kind (which pulled the same digest back), and passed the smoke
+> test — see
+> [`docs/evidence/phase5-jenkins-ci.md`](docs/evidence/phase5-jenkins-ci.md) §5.
+> No item is BLOCKED; details in
+> [`docs/validation-report.md`](docs/validation-report.md).
 
 ## Repository layout
 
@@ -37,9 +38,9 @@ evidence to prove all of it actually ran.
 │   ├── environment-audit.md   Phase 1 host & tooling audit
 │   ├── architecture.md        component diagram, tagging policy, failure modes
 │   ├── deployment-guide.md    every command, per environment
-│   ├── troubleshooting.md     13 real issues hit during the run, with fixes
+│   ├── troubleshooting.md     15 real issues hit during the run, with fixes
 │   ├── pipeline-optimization.md  baseline vs optimised, measured
-│   ├── validation-report.md   acceptance checklist (21 PASS / 1 BLOCKED)
+│   ├── validation-report.md   acceptance checklist (22 PASS / 0 BLOCKED)
 │   ├── evidence/              raw command output, no secrets
 │   ├── SLIDE_NOTES.md         (pre-existing)
 │   └── DevOps_CaseStudy_Report.pdf  (pre-existing)
@@ -105,15 +106,17 @@ the controller is bound to `127.0.0.1`, so a plain `docker compose up` does
 
 ## Jenkins CI/CD
 
-**Deployed and verified.** A Jenkins controller (`2.541.3`, loopback-only)
-with a dedicated inbound agent `linux-docker-agent` (Docker CLI + buildx +
-`kubectl` + `kind` + `python3-venv` + `git`, Docker socket mounted) ran the
-`devops-demo-web` job to **SUCCESS** (build #2, 16.09 s): Validate → Unit
-tests (2 pass) → Build image (BuildKit) → read-only cluster check. Because
-the repo tree is uncommitted, that job builds the **current** working tree
-via a read-only bind mount and skips Publish/Deploy/Smoke; the authoritative
-SCM-driven pipeline is the [`Jenkinsfile`](Jenkinsfile). Evidence:
-[`docs/evidence/phase5-jenkins-ci.md`](docs/evidence/phase5-jenkins-ci.md).
+**Deployed and verified end-to-end.** A Jenkins controller (`2.541.3`,
+loopback-only) with a dedicated inbound agent `linux-docker-agent` (Docker CLI +
+buildx + `kubectl` + `kind` + `python3-venv` + `git`, Docker socket mounted) runs
+the authoritative [`Jenkinsfile`](Jenkinsfile) from a **Multibranch Pipeline**
+(`devops-case-study`, source `file:///repo-src`) that discovers `main`. Build
+**#3 = SUCCESS (~118 s)** executed every stage: Checkout → Validate → Unit tests
+(2 pass) ‖ Build image (BuildKit, 186 MB) → **Publish** (real `docker push` to
+Docker Hub) → **Deploy** (`kubectl set image` + rollout, 2/2) → **Smoke**
+(`/health` 200). The kind node pulled the pushed digest back from Docker Hub,
+proving the full loop. Evidence:
+[`docs/evidence/phase5-jenkins-ci.md`](docs/evidence/phase5-jenkins-ci.md) §5.
 
 Credentials in Jenkins:
 
@@ -121,11 +124,11 @@ Credentials in Jenkins:
 | --- | --- | --- | --- |
 | `dockerhub-username` | Secret text | Docker Hub namespace (`21520623`) | created |
 | `kubeconfig-dev` | Secret file | kind internal kubeconfig (`devops-demo`) | created |
-| `dockerhub-creds` | Username with password | Docker Hub user + **access token** | **BLOCKED** — operator adds via UI |
+| `dockerhub-creds` | Username with password | Docker Hub user + **access token** | created (operator-added); used by build #3 push |
 
-To run the full SCM-driven pipeline (Publish → Deploy → Smoke), commit the
-tree, point the job at `Jenkinsfile`, and add `dockerhub-creds`. Full setup
-steps — including how to generate a namespace-scoped kubeconfig with a
+The full SCM-driven pipeline (Publish → Deploy → Smoke) has been run for real
+against `main`. Full setup steps — including how the multibranch job is wired to
+`file:///repo-src`, and how to generate a namespace-scoped kubeconfig with a
 limited Role/RoleBinding — are in
 [`docs/deployment-guide.md`](docs/deployment-guide.md) §5.
 

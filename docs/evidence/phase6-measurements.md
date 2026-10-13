@@ -81,13 +81,15 @@ Jenkins adds: checkout (~2 s cold, ~0.5 s warm), venv install (~2 s warm with
 
 ## 5. What was NOT optimised (deliberate)
 
-- **No parallel Jenkins stages yet** — pending Jenkins being provisioned
-  (see Phase 5 blocker). When Jenkins is available, `Unit tests` and
-  `Build image` can run in `parallel { }` because neither depends on the
-  other's output.
-- **No registry-based BuildKit cache (`--cache-from type=registry`)** —
-  requires Docker Hub credentials; will be enabled in the Jenkinsfile once
-  the `dockerhub-creds` credential exists.
+- **Parallel Jenkins stages — now DONE** *(update: Phase 5)*. The authoritative
+  `Jenkinsfile` runs `Unit tests` and `Build image` inside a `parallel { }` block
+  (neither consumes the other's output); verified in multibranch build **#3**
+  (`docs/evidence/phase5-jenkins-ci.md` §5). It was listed as "not yet" only
+  because Jenkins had not been provisioned when Phase 6 was first recorded.
+- **No registry-based BuildKit cache (`--cache-from type=registry`)** — still
+  **not implemented or measured**. The credential prerequisite is now met
+  (`dockerhub-creds` exists; build #3 pushes to Docker Hub), so this remains a
+  candidate next optimization, but no improvement numbers are claimed for it.
 - **No multi-stage build** — for a Flask app with one runtime dependency the
   gain is <1 MB and adds complexity. Deferred.
 - **No `--squash` or `docker buildx bake`** — not needed at this scale.
