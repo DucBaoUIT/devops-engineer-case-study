@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: demo-web
-        image: DOCKERHUB_USERNAME/devops-demo-web:latest
+        image: 21520623/devops-demo-web:latest
         imagePullPolicy: Always
         ports: [{name: http, containerPort: 8080}]
         env:

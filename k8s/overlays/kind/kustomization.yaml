@@ -1,0 +1,42 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Local kind lab overlay.
+# - Base manifests keep pointing at Docker Hub (production shape).
+# - This overlay swaps the image to the locally-built tag and switches
+#   imagePullPolicy to IfNotPresent so the image loaded via `kind load
+#   docker-image` is used instead of trying to pull it.
+# - Adds a startupProbe (missing from base) so slow first-start pods are
+#   not killed by livenessProbe.
+
+namespace: devops-demo
+
+resources:
+  - ../../namespace.yaml
+  - ../../deployment.yaml
+  - ../../service.yaml
+
+images:
+  - name: 21520623/devops-demo-web
+    newName: devops-demo-web
+    newTag: cc5480ddbf9e-w53253e69
+
+patches:
+  - target:
+      kind: Deployment
+      name: demo-web
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+      - op: add
+        path: /spec/template/spec/containers/0/startupProbe
+        value:
+          httpGet:
+            path: /health
+            port: http
+          failureThreshold: 30
+          periodSeconds: 2
+      - op: add
+        path: /spec/template/spec/terminationGracePeriodSeconds
+        value: 30

@@ -1,0 +1,68 @@
+# Jenkins inbound agent with the toolchain the case-study pipeline needs.
+#
+# The stock jenkins/inbound-agent image has Java + the agent JAR but no
+# Docker CLI, kubectl, kind or Python. This image adds them so a job on the
+# `linux-docker-agent` label can: run unit tests, build/push images, and
+# deploy to the kind cluster.
+#
+# Security notes:
+#   * The Docker socket is mounted at RUNTIME (see docker-compose.yml), not
+#     baked in. A job with socket access is effectively root on the host —
+#     only run trusted pipelines on this agent.
+#   * DOCKER_GID must match the host's `docker` group GID (990 on this VPS)
+#     so the unprivileged `jenkins` user can talk to the socket. Rebuild with
+#     --build-arg DOCKER_GID=$(getent group docker | cut -d: -f3) if it differs.
+
+FROM jenkins/inbound-agent:latest-jdk17
+
+USER root
+
+ARG DOCKER_GID=990
+ARG KUBECTL_VERSION=v1.34.0
+ARG KIND_VERSION=v0.30.0
+ARG DOCKER_CLI_VERSION=27.5.1
+ARG BUILDX_VERSION=v0.38.0   # match host: docker buildx version
+
+# Base utilities. git and curl already exist in the inbound-agent image but
+# are listed for clarity/reproducibility.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl git unzip \
+      python3 python3-venv python3-pip \
+ && rm -rf /var/lib/apt/lists/*
+
+# Docker CLI (static binary — no daemon installed in the agent).
+RUN curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" \
+      -o /tmp/docker.tgz \
+ && tar -xzf /tmp/docker.tgz -C /tmp \
+ && install -m 0755 /tmp/docker/docker /usr/local/bin/docker \
+ && rm -rf /tmp/docker /tmp/docker.tgz
+
+# docker buildx CLI plugin. REQUIRED: the app Dockerfile uses BuildKit features
+# (`# syntax=docker/dockerfile:1.7` frontend + `--mount=type=cache`), and the
+# static Docker CLI tarball does NOT bundle buildx. Without it, `docker build`
+# fails with "BuildKit is enabled but the buildx component is missing".
+RUN mkdir -p /usr/local/libexec/docker/cli-plugins \
+ && curl -fsSL "https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-amd64" \
+      -o /usr/local/libexec/docker/cli-plugins/docker-buildx \
+ && chmod 0755 /usr/local/libexec/docker/cli-plugins/docker-buildx
+
+# kubectl (matches the kind cluster minor version).
+RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+      -o /usr/local/bin/kubectl \
+ && chmod 0755 /usr/local/bin/kubectl
+
+# kind (only needed if a job creates/loads clusters; harmless otherwise).
+RUN curl -fsSL "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64" \
+      -o /usr/local/bin/kind \
+ && chmod 0755 /usr/local/bin/kind
+
+# Give the unprivileged jenkins user access to the mounted Docker socket by
+# creating a group with the host's docker GID and adding jenkins to it.
+RUN if ! getent group "$DOCKER_GID" >/dev/null; then groupadd -g "$DOCKER_GID" docker; fi \
+ && usermod -aG "$DOCKER_GID" jenkins
+
+USER jenkins
+
+# Sanity: these run at build time and fail the build if a tool is missing.
+RUN docker --version && docker buildx version && kubectl version --client && kind version && python3 --version && git --version

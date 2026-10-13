@@ -1,5 +1,36 @@
+# VCS
 .git
+.gitignore
+
+# Python
 .venv
+venv
 __pycache__
 *.pyc
+*.pyo
+.pytest_cache
+.coverage
+
+# Secrets — never ship into the image
 .env
+.env.*
+*.pem
+*.key
+id_rsa
+id_ed25519
+kubeconfig
+kubeconfig-*
+credentials*
+secrets/
+
+# Not needed at runtime; keep build context small and cache efficient
+docs
+slides
+k8s
+scripts
+Jenkinsfile
+README.md
+docker-compose.yml
+Dockerfile
+.dockerignore
+devops-case-study*.log

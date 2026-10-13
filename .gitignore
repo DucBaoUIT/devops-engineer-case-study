@@ -22,3 +22,6 @@ secrets/
 # Generated files
 *.log
 .DS_Store
+
+# Local Jenkins provisioning helpers (may hold bootstrap creds) — never commit
+.jenkins-setup/
