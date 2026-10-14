@@ -8,7 +8,7 @@
                           │  DucBaoUIT/devops-engineer │
                           │      -case-study           │
                           └──────────────┬─────────────┘
-                                         │ webhook / SCM poll
+                                         │ SCM poll — every 5 min, anonymous HTTPS
                                          ▼
    ┌──────────────────────────────────────────────────────────────────┐
    │                    Jenkins controller (container)                │
@@ -66,6 +66,16 @@
    │    image devops-demo-web:local (built from same Dockerfile)      │
    └──────────────────────────────────────────────────────────────────┘
 ```
+
+> **CI/CD source & trigger (verified live).** The authoritative multibranch job
+> `devops-case-study` pulls from **GitHub** —
+> `https://github.com/DucBaoUIT/devops-engineer-case-study.git` (public repo →
+> anonymous HTTPS, no credential) — and re-indexes every **5 min** via a
+> `PeriodicFolderTrigger` (outbound-only; **no webhook**, because Jenkins is
+> loopback-only behind NAT). Build **#5** verified the GitHub clone
+> (`main@703d0ed`). Builds **#1–#4** used an earlier `file:///repo-src`
+> read-only bind-mount (still present in `docker-compose.yml`); build **#3** was
+> the full push → deploy → smoke proof from that mount.
 
 ## 2. Environments
 

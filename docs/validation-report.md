@@ -30,7 +30,7 @@ Working image tag: `devops-demo-web:cc5480ddbf9e-w53253e69`
 | A15 | Unit-test failure halts the pipeline before build | **PASS** (simulated) | Drill 3 — exit code 1 from a deliberately failing test |
 | A16 | Image tag is immutable and traceable to a git commit | **PASS** | Tag format `<git-sha-12>-w<worktree-hash>`; Jenkinsfile uses `env.GIT_COMMIT.take(12)` |
 | A17 | No secrets in repository, image or logs | **PASS** | `.gitignore` + `.dockerignore` block `.env*`, `*.pem`, `*.key`, `id_rsa`, `id_ed25519`, `kubeconfig*`, `credentials*`, `secrets/`; Jenkinsfile references credentials by ID only |
-| A18 | Jenkins pipeline completes successfully | **PASS** | Multibranch `devops-case-study/main` build **#3 `SUCCESS` (~118 s)** on agent `linux-docker-agent`, running the repo's authoritative `Jenkinsfile` @ `9b93e21`: Checkout → Validate → Unit tests (2 pass) ‖ Docker build (BuildKit/buildx, 186 MB) → Publish (real push) → Deploy (rollout 2/2) → Smoke (`/health` 200). `docs/evidence/phase5-jenkins-ci.md` §5. |
+| A18 | Jenkins pipeline completes successfully | **PASS** | Multibranch `devops-case-study/main`, SCM source **GitHub** (`https://github.com/DucBaoUIT/devops-engineer-case-study.git`, anonymous HTTPS, 5-min poll). Build **#3 `SUCCESS` (~118 s)** — from the earlier `file:///repo-src` mount — ran the authoritative `Jenkinsfile` @ `9b93e21`: Checkout → Validate → Unit tests (2 pass) ‖ Docker build (BuildKit/buildx, 186 MB) → Publish (real push) → Deploy (rollout 2/2) → Smoke (`/health` 200). Build **#5 `SUCCESS`** = first **GitHub-sourced** run: cloned from github.com, checked out `main@703d0ed`, ran Checkout → Validate → Unit tests, skipped Build/Publish/Deploy/Smoke (docs-only). `docs/evidence/phase5-jenkins-ci.md` §5, §8. |
 | A19 | Image pushed to Docker Hub | **PASS** | Build #3: `docker login` → `Login Succeeded`, pushed `21520623/devops-demo-web:9b93e2104bec` + `:latest`, digest `sha256:dc269a5a…6150`. kind then **pulled the same digest** back (running pods' `imageID` matches), proving the round-trip. `dockerhub-creds` (user `21520623` + access token) added by operator. `docs/evidence/phase5-jenkins-ci.md` §5/§5.1. |
 | A20 | Deployment uses the expected image tag | **PASS** | After build #3: `kubectl get deploy demo-web -o jsonpath='{..image}'` → `21520623/devops-demo-web:9b93e2104bec` (the CI-pushed Hub tag); pods' `imageID` = `docker.io/21520623/devops-demo-web@sha256:dc269a5a…6150` |
 | A21 | Smoke test passes | **PASS** | `/health` 200, `/` returns `{"service":"demo-web","version":"k8s","message":"Hello from Kubernetes"}` |
@@ -46,7 +46,7 @@ Working image tag: `devops-demo-web:cc5480ddbf9e-w53253e69`
 | `docs/evidence/phase4-kind-deploy.md` | kind cluster creation, deployment apply, rollout status, smoke tests via port-forward |
 | `docs/evidence/phase6-measurements.md` | Baseline vs optimised build/stop/deploy timings |
 | `docs/evidence/phase7-rollback-drill.md` | Three failure drills: bad image tag, failing readiness probe, failing unit test |
-| `docs/evidence/phase5-jenkins-ci.md` | Jenkins provisioning (controller, 71 plugins, agent node, credentials) + build #1 FAILURE (buildx), build #2 harness SUCCESS, and **build #3 authoritative end-to-end** (real push → deploy → smoke, digest round-trip proof) |
+| `docs/evidence/phase5-jenkins-ci.md` | Jenkins provisioning (controller, 71 plugins, agent node, credentials) + build #1 FAILURE (buildx), build #2 harness SUCCESS, **build #3 authoritative end-to-end** (real push → deploy → smoke, digest round-trip proof), and **§8 migration to GitHub SCM** (build #5, first GitHub-sourced run) |
 
 No evidence file contains a token, password, private key or kubeconfig
 content. Docker Hub credentials appear only as masked `****` in console excerpts
@@ -75,12 +75,16 @@ pipeline build to **SUCCESS**:
   (`demo-web 2/2 READY`). Evidence: `docs/evidence/phase5-jenkins-ci.md`.
 
 **Source strategy (updated).** Build #2 above used a read-only bind-mount harness
-while the tree was uncommitted. The tree is now committed (approved: *commit
-locally, no remote push*; `HEAD = 9b93e21`), so the authoritative multibranch job
-`devops-case-study` runs the repo's real `Jenkinsfile` via `checkout scm` from
-`file:///repo-src` (repo mounted read-only into the controller). Its build **#3**
-is the full end-to-end run recorded in A19 below and
-`docs/evidence/phase5-jenkins-ci.md` §5.
+while the tree was uncommitted. The tree is now committed **and published to
+GitHub** (`main` = `703d0ed`, in sync with `origin/main`). The authoritative
+multibranch job `devops-case-study` now sources from **GitHub**
+(`https://github.com/DucBaoUIT/devops-engineer-case-study.git`, anonymous HTTPS,
+5-min poll) and runs the repo's real `Jenkinsfile` via `checkout scm`. Build
+**#3** — from the earlier `file:///repo-src` mount — is the full end-to-end
+push + deploy + smoke run recorded in A19 below and
+`docs/evidence/phase5-jenkins-ci.md` §5; build **#5** is the first GitHub-sourced
+run (`main@703d0ed`, §8): Checkout → Validate → Unit tests ran, and
+Build/Publish/Deploy/Smoke correctly skipped (docs-only change).
 
 ### A19 — Docker Hub push — RESOLVED (real push verified)
 

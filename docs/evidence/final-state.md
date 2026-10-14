@@ -6,6 +6,12 @@ to Docker Hub and deployed it to kind.
 > Every value below is real command output captured at the timestamp above. No
 > secrets are included (the Docker Hub namespace and image digest are public
 > registry metadata). Cross-reference: `docs/evidence/phase5-jenkins-ci.md` §5.
+>
+> **Refreshed 2026-10-14 (final audit):** the *Git status* and *jobs* sections
+> below were updated for the GitHub-SCM migration (build #5) and the now-published
+> repo (`main` = `703d0ed`, in sync with `origin/main`). The cluster/deployment
+> data is **unchanged** and re-verified: still
+> `21520623/devops-demo-web:9b93e2104bec`, 2/2 Ready, digest `sha256:dc269a5a…6150`.
 
 ## Host
 Linux ubuntu 6.8.0-79-generic #79-Ubuntu SMP PREEMPT_DYNAMIC Tue Aug 12 14:42:46 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux
@@ -96,16 +102,19 @@ HTTP=200
 ## Jenkins (loopback only — 127.0.0.1:8080 / 127.0.0.1:50000)
 controller: jenkins/jenkins:lts-jdk17, version 2.541.3, HTTP 200, wizard complete
 agent:      linux-docker-agent — online, 2 executors (docker+buildx, kubectl, kind, python3-venv, git)
-jobs:       devops-case-study (Multibranch, file:///repo-src) — main build #3 SUCCESS end-to-end
+jobs:       devops-case-study (Multibranch, GitHub https://github.com/DucBaoUIT/devops-engineer-case-study.git, 5-min poll) — main build #5 SUCCESS (GitHub-sourced, main@703d0ed); build #3 SUCCESS end-to-end (push+deploy+smoke, earlier file:///repo-src mount)
             devops-demo-web  (read-only CI harness) — build #2 SUCCESS
 creds:      dockerhub-username, kubeconfig-dev, dockerhub-creds — all present (values masked)
 
-## Git status
-## main...origin/main [ahead 3]     (3 local commits, NOT pushed — per operator approval)
+## Git status (refreshed during the final audit, 2026-10-14)
+## main...origin/main — IN SYNC (local HEAD == GitHub refs/heads/main)
+HEAD=703d0ed5b14a8a384f3e888e74e46d2c35499d3f
+  == GitHub main, verified via anonymous `git ls-remote https://github.com/DucBaoUIT/devops-engineer-case-study.git`
+  (SSH fetch/push from this host is unavailable: no authorized deploy key — publickey denied)
+recent commits:
+703d0ed docs(pipeline-optimization): record build #4 docs-only skip as measured gate evidence
+eeb7f1d docs: record authoritative Jenkins build #3 (real Docker Hub push + deploy)
 9b93e21 Jenkins: make Build-image gate robust to cleanWs (git-diff instead of changeset)
-3a3c472 Jenkins: enable SCM-driven run (multibranch file://) + fix first-build changeset skip
-edb4f14 Complete DevOps case study: kind deploy, hardened image, Jenkins CI/CD, docs+evidence
-HEAD=9b93e2104becbf1cb89950c8f4141b73c972a2e0
 
 Working tree at capture: the Phase-5 documentation reconciliation (this
 snapshot + `validation-report.md`, `evidence/phase5-jenkins-ci.md`,

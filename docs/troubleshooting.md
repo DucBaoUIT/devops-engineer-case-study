@@ -456,6 +456,14 @@ docker exec -u root devops-case-study-jenkins-1 \
 Verified: `git ls-remote file:///repo-src` succeeds from both agent and
 controller as uid 1000 (the agent image build also asserts this now).
 
+> **Status after the final audit (2026-10-14).** The authoritative multibranch
+> source was migrated from `file:///repo-src` to **GitHub**
+> (`https://github.com/DucBaoUIT/devops-engineer-case-study.git`, anonymous
+> HTTPS). A GitHub clone lands in the agent's own workspace owned by uid 1000, so
+> the dubious-ownership problem does **not** arise for it — T15 no longer applies
+> to the active source. It is retained as valid history (and remains relevant if
+> the `file://` mount is ever used again).
+
 **Lesson.** When Jenkins (uid 1000) reads a root-owned bind-mounted repo,
 pre-approve the path via **system/global** `safe.directory` (env/`-c` overrides
 are ignored), and remember to do it on the **controller** too — that is where

@@ -139,10 +139,12 @@ pipeline {
             sh '''
               set -eu
               mkdir -p "$BUILDKIT_CACHE_DIR"
-              # Local BuildKit cache via a persistent directory on the agent.
-              # When DOCKERHUB credentials are available, the pipeline also
-              # pushes/pulls a registry cache (see Publish stage) so fresh
-              # agents warm up quickly.
+              # Cache strategy AS BUILT: BuildKit inline/layer cache in the
+              # agent's local Docker daemon, plus a persistent $BUILDKIT_CACHE_DIR
+              # and $PIP_CACHE_DIR on the agent workspace. Registry-based cache
+              # import/export (--cache-from / --cache-to type=registry) is NOT
+              # implemented and is NOT claimed here; it remains an optional,
+              # unmeasured optimization (docs/pipeline-optimization.md §4).
               docker build \
                 --pull \
                 --tag "$IMAGE_REF" \

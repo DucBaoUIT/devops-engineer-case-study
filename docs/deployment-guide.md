@@ -193,7 +193,7 @@ profile, so a plain `docker compose up` does **not** start them.
 | Credential `kubeconfig-dev` | Secret file = kind **internal** kubeconfig (5640 B) | used in builds #2 and #3 |
 | Credential `dockerhub-creds` | **PRESENT** — user `21520623` + access token (operator-added via UI; UUID ID normalized to `dockerhub-creds`) | build #3 `docker login` → `Login Succeeded` |
 | Job `devops-demo-web` | Pipeline (read-only CI harness), build #2 SUCCESS | REST `lastBuild/api/json` |
-| Job `devops-case-study` | **Multibranch Pipeline** on `file:///repo-src`; build **#3 SUCCESS** end-to-end (push + deploy + smoke) | Groovy index + REST console |
+| Job `devops-case-study` | **Multibranch Pipeline** on **GitHub** (`https://github.com/DucBaoUIT/devops-engineer-case-study.git`, anonymous HTTPS, 5-min `PeriodicFolderTrigger`); build **#3 SUCCESS** end-to-end (push + deploy + smoke, from the earlier `file:///repo-src` mount); build **#5 SUCCESS** = first GitHub-sourced run (`main@703d0ed`) | Groovy index + REST console |
 
 ### 5.2 How it was brought up (repeatable)
 
@@ -282,15 +282,27 @@ end-to-end. Reproduce it as follows:
    operator originally added this credential with an auto-generated UUID ID; it
    was normalized to `dockerhub-creds` — the ID the `Jenkinsfile` references.)
 
-2. **Commit the tree and expose it to Jenkins as SCM.** Approved as *commit
-   locally, no remote push* (`HEAD = 9b93e21`). The repo is bind-mounted
-   **read-only** into the controller and agent at `/repo-src` (see
-   `docker-compose.yml`), and the multibranch source is `file:///repo-src` with
-   *Branch Discovery* + *Build Configuration → by Jenkinsfile* (Script Path
-   `Jenkinsfile`). Branch indexing discovers `main` and sets `BRANCH_NAME=main`,
-   which the declarative `when { branch 'main' }` gates require.
+2. **Publish the tree and expose it to Jenkins as SCM.** The tree is committed
+   and **published to GitHub** — `main` = `703d0ed`, in sync with `origin/main`
+   (verified via anonymous `git ls-remote https://…`). The authoritative
+   multibranch source is now **GitHub**
+   (`https://github.com/DucBaoUIT/devops-engineer-case-study.git`, public →
+   anonymous HTTPS, no credential) with *Branch Discovery* + *Build
+   Configuration → by Jenkinsfile* (Script Path `Jenkinsfile`), plus a **5-min
+   `PeriodicFolderTrigger`** for outbound-only re-indexing (no webhook: Jenkins
+   is loopback-only behind NAT). Branch indexing discovers `main` and sets
+   `BRANCH_NAME=main`, which the declarative `when { branch 'main' }` gates
+   require.
 
-   Two setup details were necessary (both recorded in `docs/troubleshooting.md`):
+   > **History.** Builds #1–#4 used an earlier `file:///repo-src` source (the
+   > repo bind-mounted **read-only** into the controller and agent — the mount
+   > still exists in `docker-compose.yml`). Build #3 was the full end-to-end
+   > push + deploy + smoke from that mount. During the final audit the source was
+   > switched to GitHub and build #5 (`main@703d0ed`) verified the GitHub clone.
+
+   Two setup details were necessary **for that `file://` source** (both recorded
+   in `docs/troubleshooting.md`; neither applies to the GitHub HTTPS clone, which
+   the agent checks out into its own workspace):
    - **git `safe.directory`** for the root-owned `/repo-src` mount, set in
      **system** config on the controller *and* baked into the agent image
      (indexing / Jenkinsfile loading run on the controller flyweight) — **T15**.

@@ -110,13 +110,19 @@ the controller is bound to `127.0.0.1`, so a plain `docker compose up` does
 loopback-only) with a dedicated inbound agent `linux-docker-agent` (Docker CLI +
 buildx + `kubectl` + `kind` + `python3-venv` + `git`, Docker socket mounted) runs
 the authoritative [`Jenkinsfile`](Jenkinsfile) from a **Multibranch Pipeline**
-(`devops-case-study`, source `file:///repo-src`) that discovers `main`. Build
-**#3 = SUCCESS (~118 s)** executed every stage: Checkout → Validate → Unit tests
-(2 pass) ‖ Build image (BuildKit, 186 MB) → **Publish** (real `docker push` to
-Docker Hub) → **Deploy** (`kubectl set image` + rollout, 2/2) → **Smoke**
-(`/health` 200). The kind node pulled the pushed digest back from Docker Hub,
-proving the full loop. Evidence:
-[`docs/evidence/phase5-jenkins-ci.md`](docs/evidence/phase5-jenkins-ci.md) §5.
+(`devops-case-study`) that discovers `main`. Its SCM source is now **GitHub**
+(`https://github.com/DucBaoUIT/devops-engineer-case-study.git`; public →
+anonymous HTTPS, re-indexed every 5 min by a `PeriodicFolderTrigger` — no
+webhook, since Jenkins is loopback-only). Build **#3 = SUCCESS (~118 s)** — from
+the earlier `file:///repo-src` mount — executed every stage: Checkout → Validate
+→ Unit tests (2 pass) ‖ Build image (BuildKit, 186 MB) → **Publish** (real
+`docker push` to Docker Hub) → **Deploy** (`kubectl set image` + rollout, 2/2) →
+**Smoke** (`/health` 200); the kind node pulled the pushed digest back, proving
+the full loop. Build **#5 = SUCCESS** is the first **GitHub-sourced** run: it
+cloned from github.com, checked out `main@703d0ed`, ran Checkout → Validate →
+Unit tests, and correctly **skipped** Build/Publish/Deploy/Smoke (docs-only
+change), leaving the live deployment untouched. Evidence:
+[`docs/evidence/phase5-jenkins-ci.md`](docs/evidence/phase5-jenkins-ci.md) §5 & §8.
 
 Credentials in Jenkins:
 
@@ -127,9 +133,9 @@ Credentials in Jenkins:
 | `dockerhub-creds` | Username with password | Docker Hub user + **access token** | created (operator-added); used by build #3 push |
 
 The full SCM-driven pipeline (Publish → Deploy → Smoke) has been run for real
-against `main`. Full setup steps — including how the multibranch job is wired to
-`file:///repo-src`, and how to generate a namespace-scoped kubeconfig with a
-limited Role/RoleBinding — are in
+against `main` (build #3). Full setup steps — including how the multibranch job
+is wired to **GitHub** (anonymous HTTPS + 5-min poll), and how to generate a
+namespace-scoped kubeconfig with a limited Role/RoleBinding — are in
 [`docs/deployment-guide.md`](docs/deployment-guide.md) §5.
 
 Pipeline stages:

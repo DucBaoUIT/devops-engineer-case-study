@@ -34,7 +34,7 @@ Agent: `devops-case-study-jenkins-agent:latest` (inbound JNLP), label `linux-doc
 | Credential `kubeconfig-dev` | File credential (kind **internal** kubeconfig, 5640 bytes) | Groovy credential listing; used in build #2 |
 | Credential `dockerhub-creds` | **PRESENT** — Username/password: user `21520623` + Docker Hub **access token** (operator-added via UI, ID normalized to `dockerhub-creds`) | Groovy `dockerhub-creds present: true`; build #3 `docker login` → `Login Succeeded` |
 | Job `devops-demo-web` | Pipeline (read-only CI harness; builds #1–#2, §3–§4) | REST `createItem` → HTTP 200 |
-| Job `devops-case-study` | **Multibranch Pipeline** on `file:///repo-src`; discovers `main`; runs the authoritative `Jenkinsfile` | Groovy create + index; build **#3 SUCCESS** (real push + deploy, §5) |
+| Job `devops-case-study` | **Multibranch Pipeline**; source **migrated to GitHub** (`https://github.com/DucBaoUIT/devops-engineer-case-study.git`, anonymous HTTPS, 5-min poll) during the final audit — originally `file:///repo-src`; discovers `main`; runs the authoritative `Jenkinsfile` | build **#3 SUCCESS** (file://, real push + deploy, §5); build **#5 SUCCESS** (GitHub-sourced, §8) |
 
 Plugins installed (the ones the `Jenkinsfile` depends on):
 `git`, `git-client`, `workflow-aggregator`, `pipeline-model-definition`,
@@ -54,13 +54,16 @@ Two Jenkins jobs exist, reflecting how the work progressed:
    Deploy / Smoke were intentionally **skipped** at that time. Kept for history.
 
 2. **`devops-case-study`** (Multibranch Pipeline, §5) — the **authoritative**
-   job. The tree is now committed (approved: *commit locally, no push*;
-   `HEAD = 9b93e21`) and the repo is mounted read-only into the controller at
-   `/repo-src`, so the multibranch source `file:///repo-src` discovers `main`
-   and runs the repository's real `Jenkinsfile` via `checkout scm` — with
+   job. The tree is committed **and published to GitHub** (`main` = `703d0ed`,
+   in sync with `origin/main`). During the final audit the multibranch source was
+   **migrated from `file:///repo-src` to GitHub**
+   (`https://github.com/DucBaoUIT/devops-engineer-case-study.git`, public →
+   anonymous HTTPS) with a 5-min `PeriodicFolderTrigger`; it discovers `main` and
+   runs the repository's real `Jenkinsfile` via `checkout scm` — with
    `BRANCH_NAME=main` set, which the declarative `when { branch 'main' }` guards
    on Publish/Deploy/Smoke require. This job runs the **full** pipeline
-   including a real Docker Hub push. See `docs/deployment-guide.md` §5.4.
+   including a real Docker Hub push (build #3, from the earlier `file://` mount).
+   See §8 and `docs/deployment-guide.md` §5.4.
 
 `.jenkins-setup/` (setup secrets, raw logs) and `.venv/` are gitignored and are
 never part of `checkout scm`, so no secret enters a build workspace.
@@ -280,11 +283,60 @@ Both former blockers for an authoritative push run are now cleared:
    the account password) via the UI; its auto-generated UUID ID was normalized to
    `dockerhub-creds` (the ID the `Jenkinsfile` references). Build #3 used it:
    `docker login` → `Login Succeeded`, then a real push.
-2. **Committed source** — RESOLVED. Approved as *commit locally, no remote push*;
-   `HEAD = 9b93e21`. The repo is mounted read-only into the controller so the
-   multibranch `file:///repo-src` source can index `main` and run the real
-   `Jenkinsfile` via `checkout scm`.
+2. **Committed source** — RESOLVED, then **published**. Originally approved as
+   *commit locally, no remote push* (`HEAD = 9b93e21`) and indexed from the
+   read-only `file:///repo-src` mount. The tree is now **published to GitHub**
+   (`main` = `703d0ed`, in sync with `origin/main`), and the multibranch source
+   was migrated to GitHub HTTPS (see §8), so `checkout scm` clones from github.com.
 
 Result: the authoritative `Jenkinsfile` ran Publish → Deploy → Smoke unchanged,
 pushing `21520623/devops-demo-web:9b93e2104bec` + `:latest` and deploying the
 pushed digest to kind (build #3, SUCCESS). **No remaining Phase 5 blockers.**
+
+## 8. Migration to GitHub SCM (final audit, 2026-10-14)
+
+Builds #1–#4 above ran from a local `file:///repo-src` bind-mount — the code was
+on GitHub, but Jenkins was **not** building *from* GitHub, and there was **no
+automatic trigger**. The final audit corrected this.
+
+**Verified before the change (actual state):**
+- Live job source: `jenkins.plugins.git.GitSCMSource`, remote `file:///repo-src`,
+  credentialsId `none`, `BranchDiscoveryTrait`; **triggers: none**.
+- Build #4 `remoteUrls: file:///repo-src`, `builtSHA1: eeb7f1d…`.
+- GitHub `main` = `703d0ed…` (public repo; `git ls-remote https://…` OK from host,
+  controller **and** agent — so an anonymous HTTPS clone needs no credential).
+- SSH from this host is **not** authorized (`git@github.com: Permission denied
+  (publickey)`); fetch/push over SSH unavailable. HTTPS is anonymous/read-only.
+
+**Smallest safe change applied (reversible; prior `config.xml` backed up first):**
+- Source → `https://github.com/DucBaoUIT/devops-engineer-case-study.git`
+  (anonymous HTTPS, `credentialsId=null`), same `BranchDiscoveryTrait` +
+  `scriptPath=Jenkinsfile`.
+- Added `PeriodicFolderTrigger('5m')` — outbound-only re-index. **No webhook**:
+  Jenkins is loopback-only behind NAT, and exposing :8080 is prohibited.
+- Job description updated to match.
+
+**Verification (build #5, real console excerpt):**
+```
+Cloning repository https://github.com/DucBaoUIT/devops-engineer-case-study.git
+Checking out Revision 703d0ed5b14a8a384f3e888e74e46d2c35499d3f (main)
+Obtained Jenkinsfile from 703d0ed5b14a8a384f3e888e74e46d2c35499d3f
+Stage "Build image"          skipped due to when conditional
+Stage "Publish image"        skipped due to when conditional
+Stage "Deploy to Kubernetes" skipped due to when conditional
+Stage "Smoke test"           skipped due to when conditional
+Finished: SUCCESS
+```
+Live SCM audit after the build: `build #5 → remoteUrls:
+https://github.com/DucBaoUIT/devops-engineer-case-study.git, builtSHA1:
+703d0ed5b14a8a384f3e888e74e46d2c35499d3f`. Build #5 is **docs-only** vs its
+parent (`eeb7f1d`), so the change-gate correctly skipped Build/Publish/Deploy/
+Smoke — the live deployment stayed at `9b93e2104bec` (2/2), undisturbed.
+
+**What is now true:** CI is genuinely GitHub-driven — a new commit to
+`origin/main` is discovered within ~5 min and built from github.com. **Not yet
+re-proven from GitHub:** a *build-relevant* change (one that re-runs
+Build → Publish → Deploy) has not been pushed through the GitHub source, since
+that would rebuild/re-push/re-deploy; the full push+deploy loop remains proven by
+build #3 (§5). The gate is source-agnostic (`git diff HEAD~1 HEAD`), so a
+build-relevant GitHub commit runs the full pipeline identically.
