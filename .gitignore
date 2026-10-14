@@ -25,3 +25,5 @@ secrets/
 
 # Local Jenkins provisioning helpers (may hold bootstrap creds) — never commit
 .jenkins-setup/
+
+.qoder/
