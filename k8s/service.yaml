@@ -4,6 +4,7 @@ metadata:
   name: demo-web
   namespace: devops-demo
 spec:
-  selector: {app: demo-web}
-  ports: [{name: http, port: 80, targetPort: http}]
-  type: ClusterIP
+  selector: 
+    app: demo-web
+  ports: [{name: http, port: 80, targetPort: http, nodePort:30080}]
+  type: NodePort
