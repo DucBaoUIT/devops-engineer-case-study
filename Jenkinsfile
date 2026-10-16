@@ -1,35 +1,14 @@
-// Jenkins declarative pipeline for the DevOps case study.
+// Jenkins Declarative Pipeline for the DevOps case study.
+// Tests and image build run in parallel. Publish and deploy only run on main
+// after a successful build.
+// Image tags use the Git commit SHA for traceability; latest is for convenience.
+// Secrets are managed through Jenkins Credentials:
+//   - dockerhub-creds: Docker Hub username and access token
+//   - kubeconfig-dev: kubeconfig for the devops-demo namespace
 //
-// Design notes (why the pipeline is shaped this way):
-//   * Stages are ordered so that a failure in tests aborts before any image
-//     is built, and a failure in build aborts before any push. `when` guards
-//     on publish/deploy stages make the policy explicit.
-//   * `Unit tests` and `Build image` run in parallel — they are independent
-//     (tests need Python + source, build needs Docker + source, neither
-//     consumes the other's output).
-//   * Push/deploy only run on `main` and only when the previous stages
-//     succeeded (Jenkins declarative semantics: a failed stage aborts the
-//     pipeline unless `catchError` is used, which we do NOT use here).
-//   * Image tag = 12-char git SHA (immutable, traceable). `latest` is only
-//     used as a secondary floating tag for convenience, never as the deploy
-//     target.
-//   * Secrets are referenced by Jenkins credential ID only:
-//       - dockerhub-creds  (username/password: Docker Hub user + access token)
-//       - kubeconfig-dev   (file: kubeconfig scoped to namespace devops-demo)
-//     Nothing is hard-coded, nothing is echoed.
-//   * `changeset` on the build stage avoids rebuilding when only docs or
-//     slides changed. The `Publish` and `Deploy` stages depend on
-//     `env.IMAGE_BUILT` so they are also skipped in that case.
-//   * Post-deploy smoke test hits `/health` via a short-lived
-//     `kubectl port-forward` bound to 127.0.0.1 on the agent — no public
-//     port is opened anywhere in this pipeline.
-//
-// Required agent tools (label `linux-docker-agent`):
-//   git, python3.12, python3-venv, docker CLI + access to a Docker daemon,
-//   kubectl (>= 1.29), kind (only if deploying to the local kind lab), curl.
-//
-// If your Jenkins controller does not have a compliant agent, do NOT run
-// this pipeline on `built-in` — provision a dedicated agent instead.
+// Required tools on linux-docker-agent:
+// git, Python 3.12, Docker CLI, kubectl, kind and curl.
+// Use a dedicated agent instead of the built-in node.
 
 pipeline {
   agent { label 'linux-docker-agent' }
@@ -44,9 +23,7 @@ pipeline {
 
   environment {
     // Docker Hub namespace. Read from a Jenkins text credential
-    // (`dockerhub-username`, value: 21520623) so it is never hard-coded
-    // here and can be changed without a commit.
-    DOCKERHUB_USERNAME = credentials('dockerhub-username')   // plain-text credential
+    DOCKERHUB_USERNAME = credentials('dockerhub-username')
     IMAGE_NAME         = "${DOCKERHUB_USERNAME}/devops-demo-web"
     IMAGE_TAG          = "${env.GIT_COMMIT ? env.GIT_COMMIT.take(12) : env.BUILD_NUMBER}"
     IMAGE_REF          = "${IMAGE_NAME}:${IMAGE_TAG}"
@@ -114,16 +91,7 @@ pipeline {
         }
 
         stage('Build image') {
-          // Skip the build when only documentation/slides changed. The
-          // declarative `changeset` condition is UNRELIABLE here: `cleanWs`
-          // wipes the workspace every build, so the git plugin computes an
-          // EMPTY changelog and `changeset` never matches — the pipeline would
-          // skip Build → Publish → Deploy → Smoke on EVERY run (observed on
-          // builds #1 and #2: "empty changelog" / stage skipped). Decide with
-          // git directly against the previous commit instead (a fresh clone
-          // still has full history). Build if any relevant path changed, or on
-          // the first commit / when the diff cannot be determined (safe
-          // default = build).
+          // Skip the build when only documentation/slides changed.
           when {
             expression {
               def out = sh(returnStdout: true,
@@ -139,12 +107,6 @@ pipeline {
             sh '''
               set -eu
               mkdir -p "$BUILDKIT_CACHE_DIR"
-              # Cache strategy AS BUILT: BuildKit inline/layer cache in the
-              # agent's local Docker daemon, plus a persistent $BUILDKIT_CACHE_DIR
-              # and $PIP_CACHE_DIR on the agent workspace. Registry-based cache
-              # import/export (--cache-from / --cache-to type=registry) is NOT
-              # implemented and is NOT claimed here; it remains an optional,
-              # unmeasured optimization (docs/pipeline-optimization.md §4).
               docker build \
                 --pull \
                 --tag "$IMAGE_REF" \
@@ -265,7 +227,6 @@ pipeline {
       echo "Pipeline succeeded for ${env.IMAGE_REF}"
     }
     failure {
-      // Do NOT auto-rollback from here — rollback is a human decision.
       // Print the exact command instead so the on-call engineer can run it.
       echo """
 Pipeline failed. To roll back the deployment manually:
@@ -276,9 +237,6 @@ Or use scripts/rollback.sh from the repository root.
 """
     }
     cleanup {
-      // Remove the workspace venv and BuildKit cache directories only if
-      // the agent is ephemeral. On a persistent agent they speed up the
-      // next build, so leave them alone by default.
       cleanWs(deleteDirs: true, notFailBuild: true, cleanupMatrixParent: false)
     }
   }

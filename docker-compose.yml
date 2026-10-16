@@ -1,11 +1,5 @@
 services:
   # Jenkins controller — bound to 127.0.0.1 only.
-  # Rationale: this host has no local firewall (ufw not installed). Binding
-  # 8080/50000 to 0.0.0.0 would expose Jenkins on the LAN and, if the
-  # provider forwards those ports, on the Internet. Access it via an SSH
-  # tunnel instead:  ssh -L 8080:127.0.0.1:8080 user@vps
-  # If you deliberately want a wider bind, change the two lines below and
-  # put a real firewall in front of it.
   jenkins:
     image: jenkins/jenkins:lts-jdk17
     ports:
@@ -13,37 +7,21 @@ services:
       - "127.0.0.1:50000:50000"
     volumes:
       - jenkins_home:/var/jenkins_home
-      # Read-only view of the repo so the CONTROLLER can run multibranch
-      # indexing (branch discovery) and load the Jenkinsfile from
-      # file:///repo-src. Indexing + pipeline-definition loading happen on the
-      # controller (flyweight), NOT the agent, so the controller needs SCM
-      # reachability too. The repo has no committed secrets (.jenkins-setup/,
-      # kubeconfig*, *.pem are gitignored); the controller is loopback-only and
-      # already stores every credential, so this mount adds no new trust
-      # surface. Reversible: drop this line and recreate to revert.
+      # Read-only repo access for Multibranch indexing and Jenkinsfile loading.
       - .:/repo-src:ro
     restart: unless-stopped
     profiles: ["jenkins"]   # not started by plain `docker compose up`
     networks: [default]
-  # Build agent — label `linux-docker-agent`. Has Docker CLI, kubectl, kind,
-  # python3-venv and git (see jenkins-agent.Dockerfile).
-  #
-  # SECURITY: this container mounts the host Docker socket. Any job that runs
-  # here is effectively root on the host. Only run trusted pipelines. The
-  # socket is NOT exposed on TCP and the controller does NOT mount it.
-  #
-  # The agent joins the external `kind` network so kubectl can reach the kind
-  # API server at https://devops-demo-control-plane:6443 (use the kubeconfig
-  # from `kind get kubeconfig --name devops-demo --internal`).
-  #
-  # JENKINS_AGENT_SECRET is supplied at runtime (never committed):
-  #   JENKINS_AGENT_SECRET=<secret> docker compose --profile jenkins up -d jenkins-agent
+  # Build agent with Docker CLI, kubectl, kind, Python and Git.
+  # The Docker socket grants effective root-level access to the host.
+  # Run trusted pipelines only; the controller does not mount this socket.
   jenkins-agent:
     build:
       context: .
       dockerfile: jenkins-agent.Dockerfile
       args:
-        DOCKER_GID: "990"   # must match host: getent group docker | cut -d: -f3
+        # Match the Docker group ID on the host.
+        DOCKER_GID: "990"
     image: devops-case-study-jenkins-agent:latest
     depends_on:
       jenkins:
@@ -52,15 +30,12 @@ services:
       JENKINS_URL: http://jenkins:8080
       JENKINS_NAME: linux-docker-agent
       JENKINS_AGENT_NAME: linux-docker-agent
-      JENKINS_SECRET: ${JENKINS_AGENT_SECRET:-}   # create the node in Jenkins first, then pass its secret at runtime
+      # Pass the agent secret at runtime, never commit it.
+      JENKINS_SECRET: ${JENKINS_AGENT_SECRET:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - jenkins-agent-workspace:/home/jenkins/agent
-      # Read-only view of the working tree so the CI verification job can build
-      # the CURRENT (uncommitted) source without committing to the repo. The
-      # authoritative pipeline uses `checkout scm` (see docs/deployment-guide.md).
-      # The agent already holds the Docker socket (= host root), so this mount
-      # adds no new trust surface; only trusted pipelines run here.
+      # Read-only source access for local CI verification.
       - .:/repo-src:ro
     restart: unless-stopped
     profiles: ["jenkins"]
@@ -68,10 +43,6 @@ services:
   app:
     build: .
     image: devops-demo-web:local
-    # Left as-is: the existing container already binds 0.0.0.0:8081 and the
-    # host has no local firewall, but the primary NIC is on RFC1918 space
-    # behind NAT so exposure is LAN-only. Tightening to 127.0.0.1:8081 would
-    # be safer but is a live network-binding change — ask before flipping.
     ports: ["8081:8080"]
     environment:
       APP_VERSION: local
@@ -84,4 +55,4 @@ volumes:
 networks:
   default:
   kind:
-    external: true   # created by `kind create cluster`; agent joins it to reach the API server
+    external: true

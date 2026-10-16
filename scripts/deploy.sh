@@ -3,8 +3,7 @@
 #
 # Usage:
 #   IMAGE=devops-demo-web:<tag> scripts/deploy.sh
-#   # or, if IMAGE is unset, the image tag baked into the kustomize overlay
-#   # at k8s/overlays/kind/kustomization.yaml is used.
+#  
 #
 # Behaviour:
 #   1. Renders k8s/overlays/kind via `kubectl kustomize` (load-restrictor off,
@@ -12,11 +11,6 @@
 #   2. Applies namespace, deployment and service.
 #   3. If IMAGE is provided, patches the Deployment image and waits for rollout.
 #   4. Prints rollout status, pods, and a loopback-only port-forward hint.
-#
-# Safety:
-#   - Uses --address 127.0.0.1 for port-forward examples in the printed hint;
-#     this script does NOT open any public port.
-#   - Never deletes namespaces, PVCs, or resources outside devops-demo.
 
 set -euo pipefail
 

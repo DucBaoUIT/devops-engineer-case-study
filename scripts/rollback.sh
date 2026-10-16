@@ -5,11 +5,6 @@
 #   scripts/rollback.sh                  # undo to previous revision
 #   REVISION=2 scripts/rollback.sh       # undo to a specific revision
 #   DRY_RUN=1 scripts/rollback.sh        # show what would happen, don't undo
-#
-# Safety:
-#   - Refuses to run when the Deployment is already at revision 1 (nothing to
-#     roll back to) unless FORCE=1.
-#   - Waits for the rollback to complete and prints pod state afterwards.
 
 set -euo pipefail
 
