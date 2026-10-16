@@ -5,17 +5,6 @@ a local Kubernetes lab on `kind`, a Jenkins CI/CD pipeline, image
 publishing to Docker Hub, rollout/rollback, pipeline optimisation, and the
 evidence to prove all of it actually ran.
 
-> **Interview-ready status.** The full CI/CD loop is proven **end-to-end** with
-> recorded evidence: the Jenkins multibranch pipeline built the image, **pushed
-> it to Docker Hub** (`21520623/devops-demo-web:9b93e2104bec`, digest
-> `sha256:dc269a5a…6150`), deployed it to kind (which pulled the same digest
-> back), and passed the smoke test — see
-> [`docs/evidence/phase5-jenkins-ci.md`](docs/evidence/phase5-jenkins-ci.md) §5.
-> The narrative report is
-> [`docs/report/DevOps_CaseStudy_Report.md`](docs/report/DevOps_CaseStudy_Report.md)
-> (compiled PDF:
-> [`docs/DevOps_CaseStudy_Report.pdf`](docs/DevOps_CaseStudy_Report.pdf)).
-
 ## Repository layout
 
 ```
@@ -105,28 +94,9 @@ docker compose down
 The `jenkins` and `jenkins-agent` services are behind a compose profile and
 the controller is bound to `127.0.0.1`, so a plain `docker compose up` does
 **not** start them. They are currently **deployed** loopback-only (start with
-`docker compose --profile jenkins up -d`). See the demo guide in the report
-([`docs/report/DevOps_CaseStudy_Report.md`](docs/report/DevOps_CaseStudy_Report.md) §8).
+`docker compose --profile jenkins up -d`).
 
 ## Jenkins CI/CD
-
-**Deployed and verified end-to-end.** A Jenkins controller (`2.541.3`,
-loopback-only) with a dedicated inbound agent `linux-docker-agent` (Docker CLI +
-buildx + `kubectl` + `kind` + `python3-venv` + `git`, Docker socket mounted) runs
-the authoritative [`Jenkinsfile`](Jenkinsfile) from a **Multibranch Pipeline**
-(`devops-case-study`) that discovers `main`. Its SCM source is now **GitHub**
-(`https://github.com/DucBaoUIT/devops-engineer-case-study.git`; public →
-anonymous HTTPS, re-indexed every 5 min by a `PeriodicFolderTrigger` — no
-webhook, since Jenkins is loopback-only). Build **#3 = SUCCESS (~118 s)** — from
-the earlier `file:///repo-src` mount — executed every stage: Checkout → Validate
-→ Unit tests (2 pass) ‖ Build image (BuildKit, 186 MB) → **Publish** (real
-`docker push` to Docker Hub) → **Deploy** (`kubectl set image` + rollout, 2/2) →
-**Smoke** (`/health` 200); the kind node pulled the pushed digest back, proving
-the full loop. Build **#5 = SUCCESS** is the first **GitHub-sourced** run: it
-cloned from github.com, checked out `main@703d0ed`, ran Checkout → Validate →
-Unit tests, and correctly **skipped** Build/Publish/Deploy/Smoke (docs-only
-change), leaving the live deployment untouched. Evidence:
-[`docs/evidence/phase5-jenkins-ci.md`](docs/evidence/phase5-jenkins-ci.md) §5 & §8.
 
 Credentials in Jenkins:
 
@@ -137,10 +107,7 @@ Credentials in Jenkins:
 | `dockerhub-creds` | Username with password | Docker Hub user + **access token** | created (operator-added); used by build #3 push |
 
 The full SCM-driven pipeline (Publish → Deploy → Smoke) has been run for real
-against `main` (build #3). The GitHub-SCM migration (anonymous HTTPS + a 5-min
-`PeriodicFolderTrigger`, no webhook) and the first GitHub-sourced run (build #5)
-are documented in
-[`docs/evidence/phase5-jenkins-ci.md`](docs/evidence/phase5-jenkins-ci.md) §8.
+against `main` (build #3).
 
 Pipeline stages:
 
@@ -169,9 +136,7 @@ image to the locally-built tag, switches `imagePullPolicy` to
 
 Deployment guarantees (base + overlay):
 
-- 2 replicas, `RollingUpdate` with `maxSurge=1 maxUnavailable=0` — a bad
-  rollout never takes the service down (verified in
-  [`docs/evidence/phase7-rollback-drill.md`](docs/evidence/phase7-rollback-drill.md)).
+- 2 replicas, `RollingUpdate` with `maxSurge=1 maxUnavailable=0`
 - `startupProbe` (30 × 2 s), `readinessProbe` (5 s), `livenessProbe` (10 s),
   all on `/health`.
 - `resources.requests` 100m CPU / 64 Mi, `resources.limits` 500m CPU / 256 Mi.
@@ -187,49 +152,3 @@ Deployment guarantees (base + overlay):
 | `docker stop` | 10.22 s, exit 137 (SIGKILL) | **0.22 s, exit 143** (SIGTERM) |
 | Image size | 185 MB | 186 MB (+tini) |
 | End-to-end deploy | manual, error-prone | one command, ~9 s warm |
-
-Details and raw timings:
-[`docs/evidence/phase6-measurements.md`](docs/evidence/phase6-measurements.md)
-and the report §7
-([`docs/report/DevOps_CaseStudy_Report.md`](docs/report/DevOps_CaseStudy_Report.md)).
-
-## Troubleshooting
-
-Real issues hit and fixed during the run are recorded in the report §7
-([`docs/report/DevOps_CaseStudy_Report.md`](docs/report/DevOps_CaseStudy_Report.md)),
-each with the symptom, the diagnosis and the fix. Highlights:
-- T1 — `docker stop` took ~10 s then exit 137 (Flask ignores SIGTERM as PID 1) → fixed with `tini`.
-- T2 — kustomize "file is not in or below …" for `../../` refs → use `--load-restrictor LoadRestrictionsNone`.
-- T4 — `ErrImagePull`/`ImagePullBackOff` after `set image` → `kind load` the tag into the node (or pull from the Hub).
-- T13 — BuildKit "buildx component missing" → installed buildx v0.38.0 into `jenkins-agent.Dockerfile`.
-- T14 — build SUCCESS but every stage skipped (`changeset` empty after `cleanWs`) → gate on `git diff HEAD~1 HEAD`.
-
-## Security posture
-
-- No secret is committed, printed, logged or baked into an image.
-  `.gitignore` and `.dockerignore` both block `.env*`, `*.pem`, `*.key`,
-  `id_rsa`, `id_ed25519`, `kubeconfig*`, `credentials*`, `secrets/`.
-- The Jenkinsfile references credentials **by ID only**; the Docker Hub
-  username itself is a Jenkins text credential, not a literal in the repo.
-- Jenkins is bound to `127.0.0.1` and gated behind a compose profile.
-- The `demo-web` Service is a **NodePort** (`80:30080`), but kind does not
-  publish node ports to the host, so it is reachable only inside the kind Docker
-  network. Smoke tests use `kubectl port-forward --address 127.0.0.1`, and the
-  public demo sits behind an Nginx reverse proxy in front of that node port. No
-  LoadBalancer or ingress is provisioned and the repo opens no firewall rule.
-- The container runs as uid 10001 with a read-only root filesystem and
-  all capabilities dropped.
-- The Docker socket is **not** exposed on TCP and is **not** mounted into
-  the Jenkins controller. The provisioned `linux-docker-agent` mounts it
-  (the controller does not) and is treated as trusted — any job there is
-  effectively host-root, so only trusted pipelines run on it.
-
-## Status & further reading
-
-`docs/` is **gitignored** (local-only): the report, evidence and slides ship with
-the working tree, not the public clone (the report embeds internal environment
-details). From the local workspace:
-
-- Narrative report — [`docs/report/DevOps_CaseStudy_Report.md`](docs/report/DevOps_CaseStudy_Report.md) (PDF: [`docs/DevOps_CaseStudy_Report.pdf`](docs/DevOps_CaseStudy_Report.pdf)).
-- Evidence — [`docs/evidence/`](docs/evidence/): `phase4-kind-deploy.md`, `phase5-jenkins-ci.md`, `phase6-measurements.md`, `phase7-rollback-drill.md`, `final-state.md`.
-- Slides — [`docs/slides/`](docs/slides/): a 7-slide deck (`DevOps_CaseStudy_Slides.pptx`), speaker notes, and `build_slides.py` to regenerate it.
