@@ -6,5 +6,5 @@ metadata:
 spec:
   selector: 
     app: demo-web
-  ports: [{name: http, port: 80, targetPort: http, nodePort: 30080}]
+  ports: [{name: http, port: 80, targetPort: http, nodePort:30080}]
   type: NodePort
