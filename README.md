@@ -5,15 +5,16 @@ a local Kubernetes lab on `kind`, a Jenkins CI/CD pipeline, image
 publishing to Docker Hub, rollout/rollback, pipeline optimisation, and the
 evidence to prove all of it actually ran.
 
-> **Interview-ready status.** **22 of 22** acceptance items PASS with recorded
-> evidence, including a **full end-to-end Jenkins CI/CD run**: the multibranch
-> pipeline built the image, **pushed it to Docker Hub**
-> (`21520623/devops-demo-web:9b93e2104bec`, digest `sha256:dc269a5a…6150`),
-> deployed it to kind (which pulled the same digest back), and passed the smoke
-> test — see
+> **Interview-ready status.** The full CI/CD loop is proven **end-to-end** with
+> recorded evidence: the Jenkins multibranch pipeline built the image, **pushed
+> it to Docker Hub** (`21520623/devops-demo-web:9b93e2104bec`, digest
+> `sha256:dc269a5a…6150`), deployed it to kind (which pulled the same digest
+> back), and passed the smoke test — see
 > [`docs/evidence/phase5-jenkins-ci.md`](docs/evidence/phase5-jenkins-ci.md) §5.
-> No item is BLOCKED; details in
-> [`docs/validation-report.md`](docs/validation-report.md).
+> The narrative report is
+> [`docs/report/DevOps_CaseStudy_Report.md`](docs/report/DevOps_CaseStudy_Report.md)
+> (compiled PDF:
+> [`docs/DevOps_CaseStudy_Report.pdf`](docs/DevOps_CaseStudy_Report.pdf)).
 
 ## Repository layout
 
@@ -26,29 +27,32 @@ evidence to prove all of it actually ran.
 │   └── tests/test_app.py
 ├── k8s/
 │   ├── namespace.yaml         devops-demo
-│   ├── deployment.yaml        2 replicas, rolling update, 3 probes,
+│   ├── deployment.yaml        2 replicas, rolling update, readiness+liveness,
 │   │                          requests/limits, non-root securityContext
-│   ├── service.yaml           ClusterIP :80 → :8080
+│   ├── service.yaml           NodePort :80 → :8080 (nodePort 30080)
 │   └── overlays/kind/         kustomize overlay for the local kind lab
 │                              (image rewrite, IfNotPresent, startupProbe)
 ├── scripts/
 │   ├── deploy.sh              render overlay → apply → set image → rollout status
 │   └── rollback.sh            guarded rollout undo (REVISION=, DRY_RUN=, FORCE=)
-├── docs/
-│   ├── environment-audit.md   Phase 1 host & tooling audit
-│   ├── architecture.md        component diagram, tagging policy, failure modes
-│   ├── deployment-guide.md    every command, per environment
-│   ├── troubleshooting.md     15 real issues hit during the run, with fixes
-│   ├── pipeline-optimization.md  baseline vs optimised, measured
-│   ├── validation-report.md   acceptance checklist (22 PASS / 0 BLOCKED)
-│   ├── evidence/              raw command output, no secrets
-│   ├── SLIDE_NOTES.md         (pre-existing)
-│   └── DevOps_CaseStudy_Report.pdf  (pre-existing)
-├── slides/DevOps_CaseStudy_Presentation.pptx  (pre-existing)
+├── docs/                          gitignored — local-only (see Status below)
+│   ├── report/
+│   │   ├── DevOps_CaseStudy_Report.md   narrative report (source of truth)
+│   │   ├── build_report_vi.py           Markdown → PDF renderer
+│   │   └── images/                      diagrams + real screenshots
+│   ├── evidence/                        timestamped command output, no secrets
+│   │   ├── phase4-kind-deploy.md        kind deploy + smoke test
+│   │   ├── phase5-jenkins-ci.md         CI build → push → pull → deploy
+│   │   ├── phase6-measurements.md       optimisation timings
+│   │   ├── phase7-rollback-drill.md     bad-rollout survival + rollback
+│   │   └── final-state.md               cluster + Jenkins snapshot
+│   ├── slides/                          7-slide deck, speaker notes, build script
+│   └── DevOps_CaseStudy_Report.pdf      compiled report (PDF)
 ├── Dockerfile                 python:3.12-slim + tini + BuildKit cache mounts
-├── .dockerignore              30 entries, blocks every secret-like pattern
-├── docker-compose.yml         app (0.0.0.0:8081) + jenkins (127.0.0.1, profile-gated)
-└── Jenkinsfile                6 stages, parallel test+build, smoke test
+├── jenkins-agent.Dockerfile   CI agent image: docker+buildx, kubectl, kind, python, git
+├── .dockerignore              blocks every secret-like pattern + non-runtime paths
+├── docker-compose.yml         app (0.0.0.0:8081) + jenkins/agent (127.0.0.1, profile-gated)
+└── Jenkinsfile                7 stages, parallel test+build, smoke test
 ```
 
 ## Quick start (local, no Jenkins, no Docker Hub)
@@ -101,8 +105,8 @@ docker compose down
 The `jenkins` and `jenkins-agent` services are behind a compose profile and
 the controller is bound to `127.0.0.1`, so a plain `docker compose up` does
 **not** start them. They are currently **deployed** loopback-only (start with
-`docker compose --profile jenkins up -d`). See
-[`docs/deployment-guide.md`](docs/deployment-guide.md) §5.
+`docker compose --profile jenkins up -d`). See the demo guide in the report
+([`docs/report/DevOps_CaseStudy_Report.md`](docs/report/DevOps_CaseStudy_Report.md) §8).
 
 ## Jenkins CI/CD
 
@@ -133,10 +137,10 @@ Credentials in Jenkins:
 | `dockerhub-creds` | Username with password | Docker Hub user + **access token** | created (operator-added); used by build #3 push |
 
 The full SCM-driven pipeline (Publish → Deploy → Smoke) has been run for real
-against `main` (build #3). Full setup steps — including how the multibranch job
-is wired to **GitHub** (anonymous HTTPS + 5-min poll), and how to generate a
-namespace-scoped kubeconfig with a limited Role/RoleBinding — are in
-[`docs/deployment-guide.md`](docs/deployment-guide.md) §5.
+against `main` (build #3). The GitHub-SCM migration (anonymous HTTPS + a 5-min
+`PeriodicFolderTrigger`, no webhook) and the first GitHub-sourced run (build #5)
+are documented in
+[`docs/evidence/phase5-jenkins-ci.md`](docs/evidence/phase5-jenkins-ci.md) §8.
 
 Pipeline stages:
 
@@ -145,14 +149,17 @@ Checkout → Validate repo → [Unit tests ‖ Build image] → Publish image
         → Deploy to Kubernetes → Smoke test
 ```
 
-`Publish`, `Deploy` and `Smoke test` only run on `main` **and** only when
-the build actually happened (docs-only commits skip it via `changeset`).
+`Publish`, `Deploy` and `Smoke test` only run on `main` **and** only when the
+image was actually built. `Build image` is gated by a `git diff HEAD~1 HEAD`
+change-check — not a declarative `changeset`, which `cleanWs` defeated (T14) —
+so docs-only commits skip Build/Publish/Deploy/Smoke.
 
 ## Kubernetes manifests
 
 The base manifests under `k8s/*.yaml` are production-shaped: they reference
-`21520623/devops-demo-web:latest` with `imagePullPolicy: Always`. Change
-the namespace in `k8s/deployment.yaml` (and the matching `images:` entry in
+`21520623/devops-demo-web:latest` with `imagePullPolicy: Always`, and expose the
+app as a **NodePort** Service (`demo-web`, `80:30080` → container `8080`). Change
+the image namespace in `k8s/deployment.yaml` (and the matching `images:` entry in
 the overlay) if you fork this into your own Docker Hub account.
 
 For the local kind lab, the overlay at `k8s/overlays/kind/` rewrites the
@@ -181,22 +188,21 @@ Deployment guarantees (base + overlay):
 | Image size | 185 MB | 186 MB (+tini) |
 | End-to-end deploy | manual, error-prone | one command, ~9 s warm |
 
-Details, raw timings and the reproduction script:
-[`docs/pipeline-optimization.md`](docs/pipeline-optimization.md).
+Details and raw timings:
+[`docs/evidence/phase6-measurements.md`](docs/evidence/phase6-measurements.md)
+and the report §7
+([`docs/report/DevOps_CaseStudy_Report.md`](docs/report/DevOps_CaseStudy_Report.md)).
 
 ## Troubleshooting
 
-Thirteen real issues were hit and fixed during this run, each with the
-symptom, the diagnostic command, the root cause and the fix:
-[`docs/troubleshooting.md`](docs/troubleshooting.md).
-
-Highlights:
-- T1 — Flask ignores SIGTERM as PID 1 → fixed with `tini`.
-- T2 — kustomize `--load-restrictor` blocks `../../` refs → use `LoadRestrictionsNone`.
-- T3 — `kubectl port-forward` address syntax.
-- T4 — `ImagePullBackOff` after `kind load` was forgotten.
-- T6 — a benchmark script that silently measured a build *failure*.
-- T13 — BuildKit needs `buildx`, which the static Docker CLI tarball omits.
+Real issues hit and fixed during the run are recorded in the report §7
+([`docs/report/DevOps_CaseStudy_Report.md`](docs/report/DevOps_CaseStudy_Report.md)),
+each with the symptom, the diagnosis and the fix. Highlights:
+- T1 — `docker stop` took ~10 s then exit 137 (Flask ignores SIGTERM as PID 1) → fixed with `tini`.
+- T2 — kustomize "file is not in or below …" for `../../` refs → use `--load-restrictor LoadRestrictionsNone`.
+- T4 — `ErrImagePull`/`ImagePullBackOff` after `set image` → `kind load` the tag into the node (or pull from the Hub).
+- T13 — BuildKit "buildx component missing" → installed buildx v0.38.0 into `jenkins-agent.Dockerfile`.
+- T14 — build SUCCESS but every stage skipped (`changeset` empty after `cleanWs`) → gate on `git diff HEAD~1 HEAD`.
 
 ## Security posture
 
@@ -206,8 +212,11 @@ Highlights:
 - The Jenkinsfile references credentials **by ID only**; the Docker Hub
   username itself is a Jenkins text credential, not a literal in the repo.
 - Jenkins is bound to `127.0.0.1` and gated behind a compose profile.
-- Smoke tests use `kubectl port-forward --address 127.0.0.1`. No
-  LoadBalancer, NodePort, ingress or firewall change is made anywhere.
+- The `demo-web` Service is a **NodePort** (`80:30080`), but kind does not
+  publish node ports to the host, so it is reachable only inside the kind Docker
+  network. Smoke tests use `kubectl port-forward --address 127.0.0.1`, and the
+  public demo sits behind an Nginx reverse proxy in front of that node port. No
+  LoadBalancer or ingress is provisioned and the repo opens no firewall rule.
 - The container runs as uid 10001 with a read-only root filesystem and
   all capabilities dropped.
 - The Docker socket is **not** exposed on TCP and is **not** mounted into
@@ -215,7 +224,12 @@ Highlights:
   (the controller does not) and is treated as trusted — any job there is
   effectively host-root, so only trusted pipelines run on it.
 
-## Status
+## Status & further reading
 
-See [`docs/validation-report.md`](docs/validation-report.md) for the full
-22-item acceptance checklist with per-item evidence links.
+`docs/` is **gitignored** (local-only): the report, evidence and slides ship with
+the working tree, not the public clone (the report embeds internal environment
+details). From the local workspace:
+
+- Narrative report — [`docs/report/DevOps_CaseStudy_Report.md`](docs/report/DevOps_CaseStudy_Report.md) (PDF: [`docs/DevOps_CaseStudy_Report.pdf`](docs/DevOps_CaseStudy_Report.pdf)).
+- Evidence — [`docs/evidence/`](docs/evidence/): `phase4-kind-deploy.md`, `phase5-jenkins-ci.md`, `phase6-measurements.md`, `phase7-rollback-drill.md`, `final-state.md`.
+- Slides — [`docs/slides/`](docs/slides/): a 7-slide deck (`DevOps_CaseStudy_Slides.pptx`), speaker notes, and `build_slides.py` to regenerate it.
