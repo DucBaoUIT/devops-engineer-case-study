@@ -31,8 +31,14 @@ pipeline {
     K8S_NAMESPACE      = 'devops-demo'
     K8S_DEPLOYMENT     = 'demo-web'
     K8S_OVERLAY        = 'k8s/overlays/kind'   // switch to a prod overlay when available
-    PIP_CACHE_DIR      = "${WORKSPACE}/.pip-cache"
-    BUILDKIT_CACHE_DIR = "${WORKSPACE}/.buildkit-cache"
+    // Caches live on the agent's persistent volume root (/home/jenkins/agent is a
+    // named Docker volume), OUTSIDE $WORKSPACE. post { cleanWs(deleteDirs:true) }
+    // only wipes the per-build workspace subdir, so keeping the caches one level
+    // up lets them survive across builds. Previously PIP_CACHE_DIR was
+    // ${WORKSPACE}/.pip-cache, which cleanWs deleted every run, so each build
+    // re-created the venv AND re-downloaded all wheels from PyPI (~70-80 s).
+    PIP_CACHE_DIR      = '/home/jenkins/agent/.cache/pip'
+    BUILDKIT_CACHE_DIR = '/home/jenkins/agent/.cache/buildkit'
     DOCKER_BUILDKIT    = '1'
   }
 
@@ -226,15 +232,8 @@ pipeline {
     success {
       echo "Pipeline succeeded for ${env.IMAGE_REF}"
     }
-    // Slack alerts. The Slack plugin is configured globally (Manage Jenkins →
-    // Slack: Slack App integration, Bot User OAuth Token credential
-    // `08b1b164-…`, default channel `#pipeline-status`), so slackSend below
-    // needs no token/URL/channel here — it reuses that global config and only
-    // fires on a failing/unstable/recovered build (never on a plain success, to
-    // avoid alert fatigue). A Slack outage must not fail the build, so every
-    // send is wrapped and non-fatal.
+    // Slack alerts - default channel `#pipeline-status`
     failure {
-      // Print the exact command instead so the on-call engineer can run it.
       echo """
 Pipeline failed. To roll back the deployment manually:
   export KUBECONFIG=<kubeconfig>
