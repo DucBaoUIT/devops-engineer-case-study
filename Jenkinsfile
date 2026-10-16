@@ -226,6 +226,13 @@ pipeline {
     success {
       echo "Pipeline succeeded for ${env.IMAGE_REF}"
     }
+    // Slack alerts. The Slack plugin is configured globally (Manage Jenkins →
+    // Slack: Slack App integration, Bot User OAuth Token credential
+    // `08b1b164-…`, default channel `#pipeline-status`), so slackSend below
+    // needs no token/URL/channel here — it reuses that global config and only
+    // fires on a failing/unstable/recovered build (never on a plain success, to
+    // avoid alert fatigue). A Slack outage must not fail the build, so every
+    // send is wrapped and non-fatal.
     failure {
       // Print the exact command instead so the on-call engineer can run it.
       echo """
@@ -235,6 +242,47 @@ Pipeline failed. To roll back the deployment manually:
   kubectl -n ${env.K8S_NAMESPACE} rollout status deployment/${env.K8S_DEPLOYMENT}
 Or use scripts/rollback.sh from the repository root.
 """
+      script {
+        try {
+          slackSend(
+            color: 'danger',
+            message: ":x: *BUILD FAILED* — ${env.JOB_NAME} #${env.BUILD_NUMBER} " +
+                     "(<${env.BUILD_URL}|open build>)\n" +
+                     ">Branch: `${env.BRANCH_NAME ?: 'unknown'}`  ·  Commit: `${env.GIT_SHA_SHORT ?: env.GIT_COMMIT ?: 'n/a'}`\n" +
+                     ">Result: *${currentBuild.currentResult}* after ${currentBuild.durationString?.replace(' and counting', '') ?: 'n/a'}\n" +
+                     ">:arrows_counterclockwise: If the deploy stage ran, roll back with `scripts/rollback.sh` " +
+                     "(or `kubectl -n ${env.K8S_NAMESPACE} rollout undo deployment/${env.K8S_DEPLOYMENT}`)."
+          )
+        } catch (ignored) {
+          echo "Slack failure alert could not be sent (non-fatal): ${ignored}"
+        }
+      }
+    }
+    unstable {
+      script {
+        try {
+          slackSend(
+            color: 'warning',
+            message: ":warning: *BUILD UNSTABLE* — ${env.JOB_NAME} #${env.BUILD_NUMBER} " +
+                     "(<${env.BUILD_URL}|open build>) — tests failed but the pipeline completed."
+          )
+        } catch (ignored) {
+          echo "Slack unstable alert could not be sent (non-fatal): ${ignored}"
+        }
+      }
+    }
+    fixed {
+      script {
+        try {
+          slackSend(
+            color: 'good',
+            message: ":white_check_mark: *BUILD FIXED* — ${env.JOB_NAME} #${env.BUILD_NUMBER} " +
+                     "(<${env.BUILD_URL}|open build>) is green again."
+          )
+        } catch (ignored) {
+          echo "Slack fixed alert could not be sent (non-fatal): ${ignored}"
+        }
+      }
     }
     cleanup {
       cleanWs(deleteDirs: true, notFailBuild: true, cleanupMatrixParent: false)
