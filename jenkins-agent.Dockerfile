@@ -71,6 +71,21 @@ RUN if ! getent group "$DOCKER_GID" >/dev/null; then groupadd -g "$DOCKER_GID" d
 RUN git config --system --add safe.directory /repo-src \
  && git config --system --add safe.directory /repo-src/.git
 
+# Pre-trust GitHub's SSH host keys. When the multibranch source is switched to a
+# git@github.com remote (SSH deploy key), CLI git+ssh runs as the jenkins user and
+# the git-client "Known hosts file" strategy reads ~jenkins/.ssh/known_hosts. That
+# path lives in the container layer (NOT the persisted /home/jenkins/agent volume),
+# so it is baked here to survive `docker compose up --force-recreate`. Non-fatal if
+# GitHub is unreachable at build time (seed at runtime via
+# .jenkins-setup/ssh-deploykey-setup.sh instead). GitHub's published fingerprints:
+# https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints
+RUN mkdir -p /home/jenkins/.ssh \
+ && (ssh-keyscan -t rsa,ecdsa,ed25519 github.com > /home/jenkins/.ssh/known_hosts 2>/dev/null || true) \
+ && chmod 700 /home/jenkins/.ssh && chmod 600 /home/jenkins/.ssh/known_hosts \
+ && chown -R jenkins:jenkins /home/jenkins/.ssh \
+ && if [ -s /home/jenkins/.ssh/known_hosts ]; then echo 'github.com host key baked: ok'; \
+    else echo 'WARN: github host key not baked (no network at build?); seed at runtime'; fi
+
 USER jenkins
 
 # Sanity: these run at build time and fail the build if a tool is missing.

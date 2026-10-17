@@ -105,6 +105,15 @@ Credentials in Jenkins:
 | `dockerhub-username` | Secret text | Docker Hub namespace (`21520623`) | created |
 | `kubeconfig-dev` | Secret file | kind internal kubeconfig (`devops-demo`) | created |
 | `dockerhub-creds` | Username with password | Docker Hub user + **access token** | created (operator-added); used by build #3 push |
+| `github-ssh-deploykey` | SSH username with private key | GitHub **deploy key** (read-only), user `git` — for the Multibranch SCM source | created; used for SSH clone/index |
+
+The Multibranch job `devops-case-study` clones
+`git@github.com:DucBaoUIT/devops-engineer-case-study.git` over **SSH** using the
+`github-ssh-deploykey` credential (a read-only GitHub deploy key, user `git`), and
+re-indexes on a 5-minute `PeriodicFolderTrigger` poll — webhooks can't reach the
+loopback-only controller. Because git-client uses the "Known hosts file" strategy,
+github.com's host key is baked into `jenkins-agent.Dockerfile` and seeded on the
+controller.
 
 The full SCM-driven pipeline (Publish → Deploy → Smoke) has been run for real
 against `main` (build #3).
