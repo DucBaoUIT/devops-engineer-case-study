@@ -4,7 +4,7 @@ app=Flask(__name__)
 @app.get("/")
 def home(): return jsonify(service="demo-web", message=os.getenv("APP_MESSAGE","Hello from DevOps case study"), version=os.getenv("APP_VERSION","local"))
 @app.get("/health")
-def health(): return jsonify(status="ok"), 500
+def health(): return jsonify(status="ok"), 200
 @app.get("/slow")
 def slow():
     time.sleep(float(os.getenv("SLOW_ENDPOINT_SECONDS","0")))
